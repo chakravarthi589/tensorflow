@@ -135,13 +135,9 @@ struct EdgeInfo {
 // Time the execution of kernels (in CPU cycles).  Used to dynamically identify
 // inexpensive kernels which can be dispatched inline.
 struct KernelTimer {
-  uint64 start_cycles = 0;
+  uint64 start_cycles = profile_utils::CpuUtils::GetCurrentClockCycle();
 
-  void Start() {
-    start_cycles = profile_utils::CpuUtils::GetCurrentClockCycle();
-  }
-
-  uint64 Stop() {
+  uint64 ElapsedCycles() {
     return profile_utils::CpuUtils::GetCurrentClockCycle() - start_cycles;
   }
 };
@@ -1248,6 +1244,7 @@ class ExecutorState {
   Rendezvous* rendezvous_;
   CollectiveExecutor* collective_executor_ = nullptr;
   SessionState* session_state_;
+  string session_handle_;
   TensorStore* tensor_store_;
   // Step-local container.
   ScopedStepContainer* step_container_;
@@ -1375,6 +1372,7 @@ ExecutorState::ExecutorState(const Executor::Args& args, ExecutorImpl* impl)
       rendezvous_(args.rendezvous),
       collective_executor_(args.collective_executor),
       session_state_(args.session_state),
+      session_handle_(args.session_handle),
       tensor_store_(args.tensor_store),
       step_container_(args.step_container),
       stats_collector_(args.stats_collector),
@@ -1620,6 +1618,7 @@ void ExecutorState::Process(TaggedNode tagged_node, int64 scheduled_nsec) {
   params.rendezvous = rendezvous_;
   params.collective_executor = collective_executor_;
   params.session_state = session_state_;
+  params.session_handle = session_handle_;
   params.tensor_store = tensor_store_;
   params.cancellation_manager = cancellation_manager_;
   params.call_frame = call_frame_;
@@ -1768,24 +1767,11 @@ void ExecutorState::Process(TaggedNode tagged_node, int64 scheduled_nsec) {
           if (completed) Finish();
         };
         nodestats::SetOpStart(stats);
-        KernelTimer timer;
-        if (item.kernel->IsExpensive()) {
-          timer.Start();
-        }
         device->ComputeAsync(async, &state->ctx, done);
-
-        // Update kernel cost based on time spent in the current thread.
-        if (item.kernel->IsExpensive()) {
-          async->UpdateCostEstimate(timer.Stop());
-        }
       } else {
         // Synchronous computes.
         OpKernelContext ctx(&params, item.num_outputs);
         nodestats::SetOpStart(stats);
-        KernelTimer timer;
-        if (item.kernel->IsExpensive()) {
-          timer.Start();
-        }
 
         if (TF_PREDICT_FALSE(
                 MightTrace(item, event_collector_, trace_using_annotations_))) {
@@ -1812,11 +1798,13 @@ void ExecutorState::Process(TaggedNode tagged_node, int64 scheduled_nsec) {
           }
         } else {
           // In the common case, avoid creating any tracing objects.
-          device->Compute(op_kernel, &ctx);
-        }
-
-        if (item.kernel->IsExpensive()) {
-          op_kernel->UpdateCostEstimate(timer.Stop());
+          if (op_kernel->IsExpensive()) {
+            KernelTimer timer;
+            device->Compute(op_kernel, &ctx);
+            op_kernel->UpdateCostEstimate(timer.ElapsedCycles());
+          } else {
+            device->Compute(op_kernel, &ctx);
+          }
         }
 
         nodestats::SetOpEnd(stats);

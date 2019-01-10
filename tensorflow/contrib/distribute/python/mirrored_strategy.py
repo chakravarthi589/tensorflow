@@ -21,8 +21,8 @@ from __future__ import print_function
 import functools
 
 from tensorflow.python.distribute import distribute_lib
+from tensorflow.python.distribute import input_lib
 from tensorflow.python.distribute import mirrored_strategy
-from tensorflow.python.distribute import values
 
 
 # pylint: disable=protected-access,invalid-name
@@ -48,8 +48,8 @@ class MirroredStrategy(distribute_lib.DistributionStrategy):
   distributed environment.
 
   There are several important concepts for distributed TensorFlow, e.g.
-  `client`, `job`, 'task', `cluster`, `in-graph replication` and
-  'synchronous training' and they have already been defined in the
+  `client`, `job`, `task`, `cluster`, `in-graph replication` and
+  `synchronous training` and they have already been defined in the
   [TensorFlow's documentation](https://www.tensorflow.org/deploy/distributed).
   The distribution strategy inherits these concepts as well and in addition to
   that we also clarify several more concepts:
@@ -104,6 +104,36 @@ class MirroredStrategy(distribute_lib.DistributionStrategy):
                                 auto_shard_dataset)
     super(MirroredStrategy, self).__init__(extended)
 
+  # Override to change the documentation to reflect the different handling of
+  # global vs. local batch size between core and contrib.
+  def experimental_make_numpy_iterator(  # pylint: disable=useless-super-delegation
+      self, numpy_input, batch_size, num_epochs=1, shuffle=1024, session=None):
+    """Makes an iterator for input provided via a nest of numpy arrays.
+
+    NOTE: The `batch_size` argument here has different behavior for this
+    contrib version of `MirroredStrategy`.
+
+    Args:
+      numpy_input: A nest of NumPy input arrays that will be distributed evenly
+        across all replicas.
+      batch_size: The number of entries from the array we should consume in one
+        step of the computation, across all replicas. This is the per-replica
+        batch size. The global batch size will be this times
+        `num_replicas_in_sync`.
+      num_epochs: The number of times to iterate through the examples. A value
+        of `None` means repeat forever.
+      shuffle: Size of buffer to use for shuffling the input examples.
+        Use `None` to disable shuffling.
+      session: (TensorFlow v1.x graph execution only) A session used for
+        initialization.
+
+    Returns:
+      An `tf.distribute.InputIterator` which returns inputs for each step of the
+      computation.  User should call `initialize` on the returned iterator.
+    """
+    return super(MirroredStrategy, self).experimental_make_numpy_iterator(
+        numpy_input, batch_size, num_epochs, shuffle, session)
+
 
 class MirroredExtended(CoreMirroredExtended):
   """Implementation of (contrib) MirroredStrategy."""
@@ -135,14 +165,14 @@ class MirroredExtended(CoreMirroredExtended):
     Returns:
       An `InputIterator` which returns inputs for each step of the computation.
     """
-    return values.DatasetIterator(dataset, self._input_workers)
+    return input_lib.DatasetIterator(dataset, self._input_workers)
 
   def _distribute_dataset(self, dataset_fn):
     if self._local_mode:
-      return values.PerReplicaDataset(
+      return input_lib.PerReplicaDataset(
           self._call_dataset_fn(dataset_fn), self._input_workers, 0)
     else:
-      return values.MultiWorkerDataset(
+      return input_lib.MultiWorkerDataset(
           functools.partial(self._call_dataset_fn, dataset_fn),
           self._input_workers,
           auto_shard=self._auto_shard_dataset)
