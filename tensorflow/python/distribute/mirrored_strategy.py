@@ -782,6 +782,14 @@ class MirroredExtended(distribute_lib.DistributionStrategyExtended):
   # TODO(priyag): Delete this once all strategies use global batch size.
   @property
   def _global_batch_size(self):
+    """`make_dataset_iterator` and `make_numpy_iterator` use global batch size.
+
+    `distribute_dataset` and `make_input_fn_iterator` assume per-replica
+    batching.
+
+    Returns:
+      Boolean.
+    """
     return True
 
 
@@ -872,13 +880,13 @@ class _MirroredReplicaThread(threading.Thread):
 
 
 class MirroredReplicaContext(distribute_lib.ReplicaContext):
-  """ReplicaContext used in MirroredStrategy.call_for_each_replica().
+  """ReplicaContext used in MirroredStrategy.extended.call_for_each_replica().
 
   Opened in `_MirroredReplicaThread`, to allow the user to invoke
   `MirroredStrategy`'s specific implementation of `merge_call()`,
   which works by delegating the function and its arguments to
   the main thread (the one that invoked
-  `MirroredStrategy.call_for_each_replica()`).
+  `MirroredStrategy.extended.call_for_each_replica()`).
   """
 
   def _merge_call(self, fn, args, kwargs):

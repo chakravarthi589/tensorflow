@@ -34,6 +34,7 @@ from tensorflow.python.keras import callbacks
 from tensorflow.python.keras import metrics as metrics_module
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras.optimizer_v2 import optimizer_v2
+from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import tf_logging as logging
@@ -525,6 +526,20 @@ def list_to_tuple(maybe_list):
   return maybe_list
 
 
+def get_iterator(dataset, distribution_strategy):
+  with distribution_strategy.scope():
+    iterator = distribution_strategy.make_dataset_iterator(dataset)
+  initialize_iterator(iterator, distribution_strategy)
+  return iterator
+
+
+def initialize_iterator(iterator, distribution_strategy):
+  with distribution_strategy.scope():
+    init_op = control_flow_ops.group(iterator.initialize())
+    if not context.executing_eagerly():
+      K.get_session().run(init_op)
+
+
 def _get_input_from_iterator(iterator, model):
   """Get elements from the iterator and verify the input shape and type."""
   next_element = iterator.get_next()
@@ -541,8 +556,6 @@ def _get_input_from_iterator(iterator, model):
     x, y, sample_weights = next_element
 
   # Validate that all the elements in x and y are of the same type and shape.
-  # We can then pass the first element of x and y to `_standardize_weights`
-  # below and be confident of the output.
   validate_distributed_dataset_inputs(
       model._distribution_strategy, x, y, sample_weights)
   return x, y, sample_weights
@@ -809,7 +822,7 @@ def _make_eager_execution_function(model, mode):
   with K.get_graph().as_default(), strategy.scope():
     # Create train ops on each of the devices when we call
     # `_per_device_fit_function`.
-    (grouped_inputs, grouped_outputs) = strategy.call_for_each_replica(
+    (grouped_inputs, grouped_outputs) = strategy.extended.call_for_each_replica(
         _per_device_function, args=(model._distributed_model,))
 
     # Unwrap all the per device values returned from `call_for_each_replica`.
