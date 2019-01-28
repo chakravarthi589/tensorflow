@@ -296,14 +296,20 @@ class TestUpgrade(test_util.TensorFlowTestCase):
   def testPositionsMatchArgGiven(self):
     full_dict = tf_upgrade_v2.TFAPIChangeSpec().function_arg_warnings
     method_names = full_dict.keys()
-    for method in method_names:
-      # doesn't test methods on objects
-      if not method.startswith("*."):
-        args = full_dict[method].keys()
-        method = get_symbol_for_name(tf, method)
-        arg_spec = tf_inspect.getfullargspec(method)
-        for (arg, pos) in args:
-          self.assertEqual(arg_spec[0][pos], arg)
+    for method_name in method_names:
+      args = full_dict[method_name].keys()
+      # special case for optimizer methods
+      if method_name.startswith("*."):
+        method = method_name.replace("*", "tf.train.Optimizer")
+      else:
+        method = method_name
+      method = get_symbol_for_name(tf, method)
+      arg_spec = tf_inspect.getfullargspec(method)
+      for (arg, pos) in args:
+        # to deal with the self argument on methods on objects
+        if method_name.startswith("*."):
+          pos += 1
+        self.assertEqual(arg_spec[0][pos], arg)
 
   def testReorderFileNeedsUpdate(self):
     reordered_function_names = (
@@ -425,9 +431,9 @@ bazel-bin/tensorflow/tools/compatibility/update/generate_v2_reorders_map
       text = ns + "(a, b)"
       _, report, errors, new_text = self._upgrade(text)
       self.assertEqual("tf.compat.v1.metrics." + m + "(a, b)", new_text)
-      self.assertIn("test.py:1:0: %s requires manual check" % ns, errors[0])
+      self.assertIn("%s requires manual check" % ns, errors[0])
       self.assertIn(
-          "WARNING: tf.metrics have been converted to object oriented"
+          "tf.metrics have been converted to object oriented"
           " versions in TF 2.0 and after. The metric function calls have been "
           "converted to compat.v1 for backward compatibility. Please update "
           "these calls to the TF 2.0 versions.", report)
@@ -456,9 +462,9 @@ bazel-bin/tensorflow/tools/compatibility/update/generate_v2_reorders_map
       text = ns + "(a, b)"
       _, report, errors, new_text = self._upgrade(text)
       self.assertEqual("tf.compat.v1.losses." + l + "(a, b)", new_text)
-      self.assertIn("test.py:1:0: %s requires manual check" % ns, errors[0])
+      self.assertIn("%s requires manual check" % ns, errors[0])
       self.assertIn(
-          "WARNING: tf.losses have been converted to object oriented"
+          "tf.losses have been converted to object oriented"
           " versions in TF 2.0 and after. The loss function calls have been "
           "converted to compat.v1 for backward compatibility. Please update "
           "these calls to the TF 2.0 versions.", report)
@@ -706,6 +712,16 @@ bazel-bin/tensorflow/tools/compatibility/update/generate_v2_reorders_map
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertEqual(new_text, expected_text)
 
+  def testKerasSavedModel(self):
+    text = (
+        "tf.contrib.saved_model.save_keras_model(model, './saved_models')\n"
+        "tf.contrib.saved_model.load_keras_model(saved_model_path)\n")
+    expected_text = (
+        "tf.keras.experimental.export(model, './saved_models')\n"
+        "tf.keras.experimental.load_from_saved_model(saved_model_path)\n")
+    _, unused_report, unused_errors, new_text = self._upgrade(text)
+    self.assertEqual(new_text, expected_text)
+
   def testStatelessMultinomial(self):
     text = (
         "tf.random.stateless_multinomial(logits, num_samples, seed, "
@@ -892,6 +908,49 @@ tf.print('abc')
     expected_text2 = "tf.gather(batch_dims=-1, params=foo, indices=bar)"
     _, unused_report, unused_errors, new_text = self._upgrade(text)
     self.assertIn(new_text, [expected_text1, expected_text2])
+
+  def testIterators(self):
+    for (text, expected) in [
+        ("(expr + yielding(data)).make_one_shot_iterator()",
+         "tf.compat.v1.data.make_one_shot_iterator((expr + yielding(data)))"),
+        ("dataset.make_one_shot_iterator()",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset)"),
+        ("dataset.make_one_shot_iterator(shared_name=foo)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, shared_name=foo)"),
+        ("dataset.make_one_shot_iterator(x, y, z)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, x, y, z)"),
+        ("dataset.make_initializable_iterator()",
+         "tf.compat.v1.data.make_initializable_iterator(dataset)"),
+        ("ds.make_initializable_iterator(shared_name=foo)",
+         "tf.compat.v1.data.make_initializable_iterator(ds, shared_name=foo)"),
+        ("dataset.make_initializable_iterator(x, y, z)",
+         "tf.compat.v1.data.make_initializable_iterator(dataset, x, y, z)"),
+        ("tf.data.make_one_shot_iterator(dataset)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset)"),
+        ("tf.data.make_one_shot_iterator(dataset, shared_name=foo)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, shared_name=foo)"),
+        ("tf.data.make_one_shot_iterator(dataset, x, y, z)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, x, y, z)"),
+        ("tf.data.make_initializable_iterator(dataset)",
+         "tf.compat.v1.data.make_initializable_iterator(dataset)"),
+        ("tf.data.make_initializable_iterator(ds, shared_name=foo)",
+         "tf.compat.v1.data.make_initializable_iterator(ds, shared_name=foo)"),
+        ("tf.data.make_initializable_iterator(dataset, x, y, z)",
+         "tf.compat.v1.data.make_initializable_iterator(dataset, x, y, z)"),
+        ("tf.compat.v1.data.make_one_shot_iterator(dataset)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset)"),
+        ("tf.compat.v1.data.make_one_shot_iterator(dataset, shared_name=foo)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, shared_name=foo)"),
+        ("tf.compat.v1.data.make_one_shot_iterator(dataset, x, y, z)",
+         "tf.compat.v1.data.make_one_shot_iterator(dataset, x, y, z)"),
+        ("tf.compat.v1.data.make_initializable_iterator(dataset)",
+         "tf.compat.v1.data.make_initializable_iterator(dataset)"),
+        ("tf.compat.v1.data.make_initializable_iterator(ds, shared_name=foo)",
+         "tf.compat.v1.data.make_initializable_iterator(ds, shared_name=foo)"),
+        ("tf.compat.v1.data.make_initializable_iterator(dataset, x, y, z)",
+         "tf.compat.v1.data.make_initializable_iterator(dataset, x, y, z)")]:
+      _, unused_report, unused_errors, actual = self._upgrade(text)
+      self.assertEqual(actual, expected)
 
   def testCast(self):
     for (name, dtype) in [("int32", "int32"),
