@@ -131,13 +131,13 @@ class FromSessionTest(test_util.TensorFlowTestCase):
     input_details = interpreter.get_input_details()
     self.assertEqual(1, len(input_details))
     self.assertEqual('Placeholder', input_details[0]['name'])
-    self.assertEqual(np.object_, input_details[0]['dtype'])
+    self.assertEqual(np.string_, input_details[0]['dtype'])
     self.assertTrue(([4] == input_details[0]['shape']).all())
 
     output_details = interpreter.get_output_details()
     self.assertEqual(1, len(output_details))
     self.assertEqual('Reshape', output_details[0]['name'])
-    self.assertEqual(np.object_, output_details[0]['dtype'])
+    self.assertEqual(np.string_, output_details[0]['dtype'])
     self.assertTrue(([2, 2] == output_details[0]['shape']).all())
     # TODO(b/122659643): Test setting/getting string data via the python
     # interpreter API after support has been added.
@@ -510,29 +510,6 @@ class FromSessionTest(test_util.TensorFlowTestCase):
 
     # Ensure that the quantized weights tflite model is smaller.
     self.assertTrue(len(quantized_tflite) < len(float_tflite))
-
-  def testFlexMode(self):
-    in_tensor = array_ops.placeholder(
-        shape=[1, 16, 16, 3], dtype=dtypes.float32)
-    out_tensor = in_tensor + in_tensor
-    sess = session.Session()
-
-    # Convert model and ensure model is not None.
-    converter = lite.TFLiteConverter.from_session(sess, [in_tensor],
-                                                  [out_tensor])
-    converter.target_ops = set([lite.OpsSet.SELECT_TF_OPS])
-    tflite_model = converter.convert()
-    self.assertTrue(tflite_model)
-
-    # Ensures the model contains TensorFlow ops.
-    # TODO(nupurgarg): Check values once there is a Python delegate interface.
-    interpreter = Interpreter(model_content=tflite_model)
-    with self.assertRaises(RuntimeError) as error:
-      interpreter.allocate_tensors()
-    self.assertIn(
-        'Regular TensorFlow ops are not supported by this interpreter. Make '
-        'sure you invoke the Flex delegate before inference.',
-        str(error.exception))
 
   def testFloatTocoConverter(self):
     """Tests deprecated test TocoConverter."""

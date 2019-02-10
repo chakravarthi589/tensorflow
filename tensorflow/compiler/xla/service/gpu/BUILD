@@ -305,6 +305,7 @@ cc_library(
         "sequential_thunk.cc",
         "thunk.cc",
         "thunk_schedule.cc",
+        "triangular_solve_thunk.cc",
         "tuple_thunk.cc",
         "while_thunk.cc",
     ],
@@ -324,6 +325,7 @@ cc_library(
         "sequential_thunk.h",
         "thunk.h",
         "thunk_schedule.h",
+        "triangular_solve_thunk.h",
         "tuple_thunk.h",
         "while_thunk.h",
     ],
@@ -364,6 +366,8 @@ cc_library(
         "//tensorflow/core/platform/default/build_config:cufft_plugin",
         "//tensorflow/core/platform/default/build_config:stream_executor_cuda",  # build_cleaner: keep
         "//tensorflow/stream_executor",
+        "//tensorflow/stream_executor:blas",
+        "//tensorflow/stream_executor:device_memory",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/memory",
@@ -396,18 +400,21 @@ cc_library(
     srcs = ["cudnn_conv_algorithm_picker.cc"],
     hdrs = ["cudnn_conv_algorithm_picker.h"],
     deps = [
+        ":autotuning_proto",
         ":backend_configs",
         ":buffer_comparator",
         ":cudnn_conv_runner",
         ":gpu_executable",
         ":ir_emission_utils",
         "//tensorflow/compiler/xla:literal_util",
+        "//tensorflow/compiler/xla:protobuf_util",
         "//tensorflow/compiler/xla/service:compiler",
         "//tensorflow/compiler/xla/service:device_memory_allocator",
         "//tensorflow/compiler/xla/service:hlo",
         "//tensorflow/compiler/xla/service:hlo_casting_utils",
         "//tensorflow/compiler/xla/service:hlo_pass",
         "//tensorflow/core:lib",
+        "//tensorflow/core:logger",
         "//tensorflow/core:stream_executor_no_cuda",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -556,6 +563,44 @@ cc_library(
 )
 
 cc_library(
+    name = "gpu_sanitize_constant_names",
+    srcs = ["gpu_sanitize_constant_names.cc"],
+    hdrs = ["gpu_sanitize_constant_names.h"],
+    deps = [
+        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/compiler/xla/service:hlo_pass",
+        "//tensorflow/compiler/xla/service/llvm_ir:buffer_assignment_util",
+        "//tensorflow/core:lib",
+    ],
+)
+
+tf_cc_test(
+    name = "gpu_sanitize_constant_names_test",
+    srcs = ["gpu_sanitize_constant_names_test.cc"],
+    tags = tf_cuda_tests_tags(),
+    deps = [
+        ":gpu_sanitize_constant_names",
+        ":ir_emission_utils",
+        "//tensorflow/compiler/xla:shape_layout",
+        "//tensorflow/compiler/xla:shape_util",
+        "//tensorflow/compiler/xla:status_macros",
+        "//tensorflow/compiler/xla:test_helpers",
+        "//tensorflow/compiler/xla:util",
+        "//tensorflow/compiler/xla:xla_data_proto",
+        "//tensorflow/compiler/xla/service:computation_layout",
+        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/compiler/xla/service:hlo_matchers",
+        "//tensorflow/compiler/xla/service:hlo_module_config",
+        "//tensorflow/compiler/xla/service:hlo_parser",
+        "//tensorflow/compiler/xla/tests:hlo_test_base",
+        "//tensorflow/compiler/xla/tests:test_utils",
+        "//tensorflow/compiler/xla/tests:xla_internal_test_main",
+        "//tensorflow/core:test",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "fusion_merger",
     srcs = ["fusion_merger.cc"],
     hdrs = ["fusion_merger.h"],
@@ -679,6 +724,7 @@ cc_library(
         ":gpu_hlo_schedule",
         ":gpu_hlo_support_checker",
         ":gpu_layout_assignment",
+        ":gpu_sanitize_constant_names",
         ":instruction_fusion",
         ":ir_emission_utils",
         ":ir_emitter",
@@ -1040,5 +1086,14 @@ tf_cc_test(
         "//tensorflow/compiler/xla/service:hlo_parser",
         "//tensorflow/compiler/xla/service:pattern_matcher",
         "//tensorflow/compiler/xla/tests:hlo_test_base",
+    ],
+)
+
+xla_proto_library(
+    name = "autotuning_proto",
+    srcs = ["autotuning.proto"],
+    deps = [
+        "//tensorflow/compiler/xla:xla_data_proto",
+        "//tensorflow/compiler/xla/service:hlo_proto",
     ],
 )

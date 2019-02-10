@@ -112,12 +112,12 @@ tf_gen_op_libs(
         "functional_ops",
     ],
     deps = [
-        "//tensorflow/contrib/tpu/proto:tpu_embedding_configuration_proto_cc",
         "//tensorflow/contrib/tpu/utils:tpu_embedding_optimization_parameters_utils",
         "//tensorflow/contrib/tpu/utils:tpu_embedding_output_layout_utils",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_proto_parsing",
         "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/protobuf/tpu:tpu_embedding_configuration_proto_cc",
     ],
 )
 
@@ -134,10 +134,10 @@ tf_custom_op_library(
         "ops/tpu_embedding_ops.cc",
     ],
     deps = [
-        "//tensorflow/contrib/tpu/proto:tpu_embedding_configuration_proto_cc",
         "//tensorflow/contrib/tpu/utils:tpu_embedding_optimization_parameters_utils",
         "//tensorflow/contrib/tpu/utils:tpu_embedding_output_layout_utils",
         "//tensorflow/core:lib_proto_parsing",
+        "//tensorflow/core/protobuf/tpu:tpu_embedding_configuration_proto_cc",
     ],
 )
 
@@ -162,14 +162,14 @@ tf_gen_op_wrapper_py(
 )
 
 tf_custom_op_library(
-    name = "python/ops/_tpu_ordinal_selector.so",
+    name = "python/ops/_tpu_ordinal_selector_op.so",
     srcs = ["ops/tpu_ordinal_selector_op.cc"],
 )
 
 tf_custom_op_py_library(
     name = "tpu_ordinal_selector_py",
-    srcs = ["ops/gen_tpu_ordinal_selector_op.py"],
-    dso = [":python/ops/_tpu_ordinal_selector.so"],
+    srcs = ["python/ops/tpu_ordinal_selector_op.py"],
+    dso = [":python/ops/_tpu_ordinal_selector_op.so"],
     kernels = [
         ":tpu_ordinal_selector_op_op_lib",
     ],
@@ -187,6 +187,11 @@ tf_gen_op_wrapper_py(
     ],
 )
 
+tf_custom_op_library(
+    name = "python/ops/_functional_ops.so",
+    srcs = ["ops/functional_ops.cc"],
+)
+
 tf_gen_op_wrapper_py(
     name = "gen_functional_ops",
     out = "python/tpu/gen_functional_ops.py",
@@ -196,9 +201,14 @@ tf_gen_op_wrapper_py(
     deps = [":functional_ops_op_lib"],
 )
 
-py_library(
+tf_custom_op_py_library(
     name = "functional",
     srcs = ["python/tpu/functional.py"],
+    dso = [":python/ops/_functional_ops.so"],
+    kernels = [
+        ":functional_ops_op_lib",
+    ],
+    srcs_version = "PY2AND3",
     visibility = [
         "//visibility:public",
     ],
@@ -221,7 +231,7 @@ py_library(
 
 tf_custom_op_py_library(
     name = "tpu_py",
-    srcs = glob(["python/ops/*.py"]),
+    srcs = ["python/ops/tpu_ops.py"],
     dso = [":python/ops/_tpu_ops.so"],
     kernels = [
         ":all_ops",
@@ -274,8 +284,8 @@ py_library(
         "//tensorflow/contrib/cluster_resolver:cluster_resolver_py",
         "//tensorflow/contrib/distribute",
         "//tensorflow/contrib/framework:framework_py",
-        "//tensorflow/contrib/tpu/proto:compilation_result_proto_py",
         "//tensorflow/core:protos_all_py",
+        "//tensorflow/core/protobuf/tpu:compilation_result_proto_py",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:dtypes",
         "//tensorflow/python:framework_ops",
@@ -315,19 +325,21 @@ py_library(
     srcs_version = "PY2AND3",
     deps = [
         ":datasets",
+        ":functional",
         ":profiler",
+        ":tpu_ordinal_selector_py",
         ":tpu_py",
         "//tensorflow/compiler/xla/experimental/xla_sharding",
         "//tensorflow/compiler/xla/python_api:xla_shape",
         "//tensorflow/contrib/cluster_resolver:cluster_resolver_py",
         "//tensorflow/contrib/compiler:xla",
-        "//tensorflow/contrib/tpu/proto:compilation_result_proto_py",
-        "//tensorflow/contrib/tpu/proto:dynamic_padding_proto_py",
-        "//tensorflow/contrib/tpu/proto:optimization_parameters_proto_py",
-        "//tensorflow/contrib/tpu/proto:topology_proto_py",
-        "//tensorflow/contrib/tpu/proto:tpu_embedding_configuration_proto_py",
-        "//tensorflow/contrib/tpu/proto:tpu_embedding_output_layout_proto_py",
         "//tensorflow/core:protos_all_py",
+        "//tensorflow/core/protobuf/tpu:compilation_result_proto_py",
+        "//tensorflow/core/protobuf/tpu:dynamic_padding_proto_py",
+        "//tensorflow/core/protobuf/tpu:optimization_parameters_proto_py",
+        "//tensorflow/core/protobuf/tpu:topology_proto_py",
+        "//tensorflow/core/protobuf/tpu:tpu_embedding_configuration_proto_py",
+        "//tensorflow/core/protobuf/tpu:tpu_embedding_output_layout_proto_py",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:control_flow_util",
@@ -459,7 +471,7 @@ py_library(
     deps = [
         ":tpu_lib",
         ":tpu_ops",
-        "//tensorflow/contrib/tpu/proto:tpu_embedding_configuration_proto_py",
+        "//tensorflow/core/protobuf/tpu:tpu_embedding_configuration_proto_py",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:init_ops",

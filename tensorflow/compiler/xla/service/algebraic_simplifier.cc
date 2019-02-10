@@ -892,7 +892,6 @@ std::unique_ptr<HloInstruction> TryDivideToShift(HloInstruction* divide,
 }  // namespace
 
 Status AlgebraicSimplifierVisitor::HandleDivide(HloInstruction* divide) {
-  Shape* shape;
   HloInstruction *a, *b, *c, *d;
   CHECK(Match(divide, m::Divide(m::Op(&a), m::Op(&b))));
   // A/1 => A
@@ -955,6 +954,7 @@ Status AlgebraicSimplifierVisitor::HandleDivide(HloInstruction* divide) {
       break;
   }
 
+  Shape* shape;
   // exp(A)/exp(B) => exp(A-B)
   if (Match(divide, m::Divide(m::Exp(m::Op(&a)), m::Exp(m::Op(&b)))
                         .WithShape(m::Shape(&shape)))) {
@@ -1005,8 +1005,9 @@ Status AlgebraicSimplifierVisitor::HandleDivide(HloInstruction* divide) {
   // (Backends can do this transformation, but generally only if the constant is
   // a scalar.)
   if (Match(divide, m::Divide(m::NonConstant(&a), m::Constant(&b)))) {
-    Literal new_literal(b->shape());
-    switch (b->shape().element_type()) {
+    Shape result_shape = b->literal().shape();
+    Literal new_literal(result_shape);
+    switch (result_shape.element_type()) {
       case F16:
         TF_RETURN_IF_ERROR(InvertConstant<half>(*b, &new_literal));
         break;
@@ -1089,7 +1090,7 @@ StatusOr<bool> AlgebraicSimplifierVisitor::HandleDotStrengthReduction(
   const int64 rhs_rank = rhs->shape().rank();
   const int64 lhs_rank = lhs->shape().rank();
   const auto& dnums = dot->dot_dimension_numbers();
-  if (dnums.rhs_contracting_dimensions_size() > 1) {
+  if (dnums.rhs_contracting_dimensions_size() != 1) {
     return false;
   }
   if (dot_rank > 2 && (lhs_rank != rhs_rank || lhs_rank != dot_rank)) {
@@ -1584,7 +1585,9 @@ StatusOr<HloInstruction*> AlgebraicSimplifierVisitor::OptimizeDotOfGather(
 Status AlgebraicSimplifierVisitor::HandleDot(HloInstruction* dot) {
   HloInstruction *lhs, *rhs;
   CHECK(Match(dot, m::Dot(m::Op(&lhs), m::Op(&rhs))));
-
+  if (options_.is_layout_sensitive()) {
+    return Status::OK();
+  }
   // Replace a zero element dot with a broadcast of the constant 0.
   if (ShapeUtil::IsZeroElementArray(dot->shape()) ||
       ShapeUtil::IsZeroElementArray(lhs->shape()) ||
@@ -1601,6 +1604,32 @@ Status AlgebraicSimplifierVisitor::HandleDot(HloInstruction* dot) {
       dot->shape().element_type() != BF16) {
     return Status::OK();
   }
+
+  // If a dot only contains batch dimensions, then tranpose the rhs and lhs
+  // acording to the batch dimension numbers and do a simple multiply.
+  if (lhs->shape().rank() ==
+          dot->dot_dimension_numbers().lhs_batch_dimensions_size() &&
+      rhs->shape().rank() ==
+          dot->dot_dimension_numbers().rhs_batch_dimensions_size()) {
+    HloInstruction* new_rhs = rhs;
+    HloInstruction* new_lhs = lhs;
+    if (lhs->shape().rank() > 1) {
+      TF_ASSIGN_OR_RETURN(
+          new_rhs,
+          MakeTransposeHlo(
+              rhs, AsInt64Slice(
+                       dot->dot_dimension_numbers().rhs_batch_dimensions())));
+      TF_ASSIGN_OR_RETURN(
+          new_lhs,
+          MakeTransposeHlo(
+              lhs, AsInt64Slice(
+                       dot->dot_dimension_numbers().lhs_batch_dimensions())));
+    }
+    TF_ASSIGN_OR_RETURN(auto new_dot,
+                        MakeBinaryHlo(HloOpcode::kMultiply, new_lhs, new_rhs));
+    return ReplaceInstruction(dot, new_dot);
+  }
+
   if (lhs->shape().rank() > 2 || rhs->shape().rank() > 2 ||
       dot->shape().rank() > 2) {
     if (options_.enable_dot_strength_reduction() &&
@@ -1639,7 +1668,11 @@ Status AlgebraicSimplifierVisitor::HandleDot(HloInstruction* dot) {
   }
 
   // Simplify dot(transpose(a), transpose(b)) to transpose(dot(b,a)).
-  if (lhs->IsRank2Transpose() && rhs->IsRank2Transpose()) {
+  if (dot->dot_dimension_numbers().lhs_batch_dimensions_size() == 0 &&
+      dot->dot_dimension_numbers().lhs_contracting_dimensions_size() == 1 &&
+      dot->dot_dimension_numbers().lhs_contracting_dimensions(0) == 1 &&
+      dot->dot_dimension_numbers().rhs_contracting_dimensions(0) == 0 &&
+      lhs->IsRank2Transpose() && rhs->IsRank2Transpose()) {
     DotDimensionNumbers dot_dimension_numbers;
     dot_dimension_numbers.add_lhs_contracting_dimensions(1);
     dot_dimension_numbers.add_rhs_contracting_dimensions(0);
@@ -2427,8 +2460,14 @@ Status AlgebraicSimplifierVisitor::HandleReshape(HloInstruction* reshape) {
   // Reshape directly to empty constant if the shape contains zero-element
   // dimension.
   if (ShapeUtil::IsZeroElementArray(reshape->shape())) {
+    // If the instruction doesn't have a layout, use a default layout for
+    // the literal result.
+    Shape reshaped_shape = reshape->shape();
+    if (!LayoutUtil::HasLayout(reshaped_shape)) {
+      LayoutUtil::SetToDefaultLayout(&reshaped_shape);
+    }
     auto empty_constant = HloInstruction::CreateConstant(
-        Literal::CreateFromShape(reshape->shape()));
+        Literal::CreateFromShape(reshaped_shape));
 
     return ReplaceWithNewInstruction(reshape, std::move(empty_constant));
   }
@@ -2714,28 +2753,72 @@ Status AlgebraicSimplifierVisitor::HandleDynamicUpdateSlice(
   return Status::OK();
 }
 
-Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* reduce) {
-  // TODO(b/112040122): Most of those optimizations can be done for multi-output
-  // reduces.
-  if (reduce->shape().IsTuple()) {
-    return Status::OK();
-  }
+Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* hlo) {
+  HloReduceInstruction* reduce = Cast<HloReduceInstruction>(hlo);
+  bool multi_output_reduce = reduce->shape().IsTuple();
 
-  auto arg = reduce->mutable_operand(0);
-  auto init_value = reduce->mutable_operand(1);
+  // For tuple reduce, we require all reduce shapes to be the same, up to the
+  // element types, so we can just the first operand and the first result as a
+  // representative.
+  auto arg = reduce->inputs()[0];
+  auto init_value = reduce->init_values()[0];
+  const Shape& reduce_result_shape =
+      multi_output_reduce ? reduce->shape().tuple_shapes(0) : reduce->shape();
+
   absl::Span<const int64> dimensions(reduce->dimensions());
   HloComputation* function = reduce->to_apply();
   if (ShapeUtil::IsZeroElementArray(arg->shape()) ||
-      ShapeUtil::IsZeroElementArray(reduce->shape())) {
-    return ReplaceWithNewInstruction(
-        reduce,
-        HloInstruction::CreateBroadcast(reduce->shape(), init_value, {}));
+      ShapeUtil::IsZeroElementArray(reduce_result_shape)) {
+    if (multi_output_reduce) {
+      std::vector<HloInstruction*> broadcast_inits;
+      int64 inputs = reduce->input_count();
+      for (int64 i = 0; i < inputs; ++i) {
+        broadcast_inits.push_back(computation_->AddInstruction(
+            HloInstruction::CreateBroadcast(reduce->shape().tuple_shapes(i),
+                                            reduce->init_values()[i], {})));
+      }
+      return ReplaceWithNewInstruction(
+          reduce, HloInstruction::CreateTuple(broadcast_inits));
+    } else {
+      return ReplaceWithNewInstruction(
+          reduce,
+          HloInstruction::CreateBroadcast(reduce_result_shape, init_value, {}));
+    }
+  }
+
+  // If the reduction results in the same number of elements, then the only
+  // possible side effect would be a reshape. Since the init_value is an
+  // identity of the reduction function, we can therefore replace the reduce
+  // with a simple reshape, ignoring the reduction function completely.
+  if (ShapeUtil::ElementsIn(reduce_result_shape) ==
+      ShapeUtil::ElementsIn(arg->shape())) {
+    if (multi_output_reduce) {
+      std::vector<HloInstruction*> reshaped_args;
+      int64 inputs = reduce->input_count();
+      for (int64 i = 0; i < inputs; ++i) {
+        reshaped_args.push_back(
+            computation_->AddInstruction(HloInstruction::CreateReshape(
+                reduce->shape().tuple_shapes(i), reduce->inputs()[i])));
+      }
+      return ReplaceWithNewInstruction(
+          reduce, HloInstruction::CreateTuple(reshaped_args));
+    } else {
+      return ReplaceWithNewInstruction(
+          reduce, HloInstruction::CreateReshape(reduce_result_shape, arg));
+    }
+  }
+
+  // TODO(b/112040122): Most of those optimizations below can be done for
+  // multi-output reduces.
+  if (multi_output_reduce) {
+    return Status::OK();
   }
 
   // A Transpose feeding a reduce can simply permute the reduction dimensions
   // field if the output of the reduce is a vector or scalar. Higher ranked
   // result may require a transpose of the output.
-  if (reduce->shape().rank() <= 1 && arg->opcode() == HloOpcode::kTranspose) {
+  if (reduce_result_shape.rank() <= 1 &&
+      arg->opcode() == HloOpcode::kTranspose) {
     auto transpose_dimensions = arg->dimensions();
     std::vector<int64> new_reduce_dimensions;
     for (auto dim : dimensions) {
@@ -2743,18 +2826,8 @@ Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* reduce) {
     }
     return ReplaceWithNewInstruction(
         reduce, HloInstruction::CreateReduce(
-                    reduce->shape(), arg->mutable_operand(0), init_value,
+                    reduce_result_shape, arg->mutable_operand(0), init_value,
                     new_reduce_dimensions, function));
-  }
-
-  // If the reduction results in the same number of elements, then the only
-  // possible side effect would be a reshape. Since the init_value is an
-  // identity of the reduction function, we can therefore replace the reduce
-  // with a simple reshape, ignoring the reduction function completely.
-  if (ShapeUtil::ElementsIn(reduce->shape()) ==
-      ShapeUtil::ElementsIn(arg->shape())) {
-    return ReplaceWithNewInstruction(
-        reduce, HloInstruction::CreateReshape(reduce->shape(), arg));
   }
 
   // If a reduce feeds a reduce with the same computation and initial value,
@@ -2782,9 +2855,9 @@ Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* reduce) {
     std::merge(arg_dims.begin(), arg_dims.end(), reduce_dims.begin(),
                reduce_dims.end(), std::back_inserter(new_dimensions));
     return ReplaceWithNewInstruction(
-        reduce,
-        HloInstruction::CreateReduce(reduce->shape(), arg->mutable_operand(0),
-                                     init_value, new_dimensions, function));
+        reduce, HloInstruction::CreateReduce(
+                    reduce_result_shape, arg->mutable_operand(0), init_value,
+                    new_dimensions, function));
   }
 
   // A reshape that collapses multiple dimensions into a dimension being
@@ -2827,7 +2900,7 @@ Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* reduce) {
       }
       return ReplaceWithNewInstruction(
           reduce, HloInstruction::CreateReduce(
-                      reduce->shape(), arg->mutable_operand(0), init_value,
+                      reduce_result_shape, arg->mutable_operand(0), init_value,
                       new_reduce_dimensions, function));
     }
   }
@@ -2842,11 +2915,11 @@ Status AlgebraicSimplifierVisitor::HandleReduce(HloInstruction* reduce) {
     HloInstruction* old_reduce = nullptr;
     for (HloInstruction* operand : arg->operands()) {
       HloInstruction* new_reduce = computation_->AddInstruction(
-          HloInstruction::CreateReduce(reduce->shape(), operand, init_value,
+          HloInstruction::CreateReduce(reduce_result_shape, operand, init_value,
                                        reduce->dimensions(), function));
       if (old_reduce != nullptr) {
         new_reduce = computation_->AddInstruction(HloInstruction::CreateMap(
-            reduce->shape(), {old_reduce, new_reduce}, function));
+            reduce_result_shape, {old_reduce, new_reduce}, function));
       }
       old_reduce = new_reduce;
     }
@@ -3107,109 +3180,6 @@ Status AlgebraicSimplifierVisitor::HandleSort(HloInstruction* sort) {
     // If it is key/value sort, the output of sort is a tuple.
     return ReplaceWithNewInstruction(
         sort, HloInstruction::CreateTuple(sort->operands()));
-  }
-
-  if (!options_.enable_permutation_sort_replacement()) {
-    return Status::OK();
-  }
-  // Check if we are sorting a permutation. In that case, we know that the keys
-  // will be sorted to the identity permutation, and we can represent the
-  // changes to the 'values' parameter as a scatter.
-  if (sort->operand_count() == 2 &&
-      operand->opcode() == HloOpcode::kGetTupleElement) {
-    const HloInstruction* other_sort = operand->operand(0);
-    // Check whether the 'values' parameter is the result of another sort with
-    // the same sort dimension.
-    if (other_sort->opcode() == HloOpcode::kSort &&
-        other_sort->operand_count() >= 2 &&
-        other_sort->dimensions(0) == dimension_to_sort &&
-        other_sort->operand(operand->tuple_index())->opcode() ==
-            HloOpcode::kIota) {
-      auto* iota =
-          Cast<HloIotaInstruction>(other_sort->operand(operand->tuple_index()));
-      // The sort operand needs to be an integral iota, and the iota dimension
-      // needs to be the dimension that was sorted.
-      if (iota->iota_dimension() == dimension_to_sort &&
-          ShapeUtil::ElementIsIntegral(iota->shape())) {
-        // We use the following construction method for a Scatter that applies
-        // the permutation from 'keys' to the 'values' parameter.
-        // - Take the "keys" parameter of the second sort and reshape it to have
-        //   another "1" dimension at the end.
-        // - Concatenate it with iotas of the same extended shape with all
-        //   different iota_dimensions except the dimension_to_sort in the order
-        //   of iota_dimensions/dimension_to_sort, so e.g. with rank 3 and
-        //   dimension_to_sort = 1, we would have concatenate of (iota with
-        //   iota_dimension=0, keys, iota with iota_dimension = 2)
-        // - Use this as the indices parameter of scatter, and set updates
-        //   of the scatter to be a reshaped 'values' parameter of sort (adding
-        //   'rank' many 1 dimensions at the end).
-        int64 rank = operand->shape().rank();
-        Shape extended_shape = operand->shape();
-        extended_shape.add_dimensions(1);
-        extended_shape.mutable_layout()->add_minor_to_major(rank);
-        auto reshaped_permutation = computation_->AddInstruction(
-            HloInstruction::CreateReshape(extended_shape, operand));
-        std::vector<HloInstruction*> concat_operands;
-        for (int64 i = 0; i < rank; ++i) {
-          if (i == dimension_to_sort) {
-            concat_operands.push_back(reshaped_permutation);
-          } else {
-            concat_operands.push_back(computation_->AddInstruction(
-                HloInstruction::CreateIota(extended_shape, i)));
-          }
-        }
-        Shape concat_shape = operand->shape();
-        concat_shape.add_dimensions(rank);
-        concat_shape.mutable_layout()->add_minor_to_major(rank);
-        auto scatter_indices =
-            rank > 1 ? computation_->AddInstruction(
-                           HloInstruction::CreateConcatenate(
-                               concat_shape, concat_operands, rank))
-                     : reshaped_permutation;
-
-        // We don't care about the operand, it will be completely overridden by
-        // the updates.
-        auto scatter_operand = computation_->AddInstruction(
-            HloInstruction::CreateIota(sort->operand(1)->shape(), 0));
-
-        // Construct the updates operand of scatter.
-        Shape update_shape = sort->operand(1)->shape();
-        for (int64 i = 0; i < rank; ++i) {
-          update_shape.add_dimensions(1);
-          update_shape.mutable_layout()->add_minor_to_major(rank + i);
-        }
-        auto scatter_updates =
-            computation_->AddInstruction(HloInstruction::CreateReshape(
-                update_shape, sort->mutable_operand(1)));
-
-        // Construct the updates computation, which simply replaces the operand
-        // values with the update values.
-        HloComputation::Builder b("update_replace_computation");
-        Shape scalar_shape = ShapeUtil::MakeShape(S32, {});
-        b.AddInstruction(
-            HloInstruction::CreateParameter(0, scalar_shape, "scalar_lhs"));
-        auto scalar_rhs = b.AddInstruction(
-            HloInstruction::CreateParameter(1, scalar_shape, "scalar_rhs"));
-        auto update_replace_computation =
-            computation_->parent()->AddEmbeddedComputation(b.Build(scalar_rhs));
-
-        ScatterDimensionNumbers dim_numbers;
-        dim_numbers.set_index_vector_dim(rank);
-        for (int64 i = 0; i < rank; ++i) {
-          dim_numbers.add_update_window_dims(rank + i);
-          dim_numbers.add_scatter_dims_to_operand_dims(i);
-        }
-        auto scatter =
-            computation_->AddInstruction(HloInstruction::CreateScatter(
-                sort->operand(1)->shape(), scatter_operand, scatter_indices,
-                scatter_updates, update_replace_computation, dim_numbers));
-        return ReplaceWithNewInstruction(
-            sort, HloInstruction::CreateTuple(
-                      {computation_->AddInstruction(HloInstruction::CreateIota(
-                           operand->shape(), dimension_to_sort)),
-                       scatter}));
-      }
-    }
   }
   return Status::OK();
 }

@@ -95,6 +95,7 @@ bool IsAlwaysDuplicable(const HloInstruction& instruction) {
     case HloOpcode::kPad:
     case HloOpcode::kReal:
     case HloOpcode::kReducePrecision:
+    case HloOpcode::kReplicaId:
     case HloOpcode::kReshape:
     case HloOpcode::kReverse:
     case HloOpcode::kRoundNearestAfz:
@@ -157,6 +158,7 @@ bool IsAlwaysDuplicable(const HloInstruction& instruction) {
     case HloOpcode::kSort:
     case HloOpcode::kTanh:
     case HloOpcode::kTrace:
+    case HloOpcode::kTriangularSolve:
     case HloOpcode::kWhile:
     case HloOpcode::kGetDimensionSize:
       return true;
