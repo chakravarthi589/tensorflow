@@ -423,7 +423,7 @@ class TFAPIChangeSpec(ast_edits.APIChangeSpec):
         "tf.batch_to_space_nd":
             "tf.batch_to_space",
         "tf.batch_gather":
-            "tf.gather",
+            "tf.compat.v1.batch_gather",
         "tf.space_to_batch_nd":
             "tf.space_to_batch",
         "tf.nn.space_to_batch":
@@ -440,6 +440,8 @@ class TFAPIChangeSpec(ast_edits.APIChangeSpec):
             "tf.io.gfile.exists",
         "tf.gfile.Glob":
             "tf.io.gfile.glob",
+        "tf.gfile.GFile":
+            "tf.io.gfile.GFile",
         "tf.gfile.IsDirectory":
             "tf.io.gfile.isdir",
         "tf.gfile.ListDirectory":
@@ -448,6 +450,8 @@ class TFAPIChangeSpec(ast_edits.APIChangeSpec):
             "tf.io.gfile.makedirs",
         "tf.gfile.MkDir":
             "tf.io.gfile.mkdir",
+        "tf.gfile.Open":
+            "tf.io.gfile.GFile",
         "tf.gfile.Remove":
             "tf.io.gfile.remove",
         "tf.gfile.Rename":

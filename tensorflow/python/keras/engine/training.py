@@ -46,11 +46,11 @@ from tensorflow.python.keras.saving import saving_utils
 from tensorflow.python.keras.utils import data_utils
 from tensorflow.python.keras.utils import losses_utils
 from tensorflow.python.keras.utils.generic_utils import slice_arrays
+from tensorflow.python.keras.utils.mode_keys import ModeKeys
 from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.training import optimizer as tf_optimizer_module
 from tensorflow.python.training.checkpointable import base as checkpointable
-from tensorflow.python.training.mode_keys import ModeKeys
 from tensorflow.python.util import nest
 from tensorflow.python.util.tf_export import keras_export
 
@@ -543,10 +543,10 @@ class Model(Network):
           else:
             total_loss = 0.
 
-        # Add regularization penalties
-        # and other layer-specific losses.
-        for loss_tensor in self.losses:
-          total_loss += loss_tensor
+        # Add regularization penalties and other layer-specific losses.
+        if self.losses:
+          total_loss += losses_utils.scale_loss_for_distribution(
+              math_ops.add_n(self.losses))
 
       # Prepare gradient updates and state updates.
       self.total_loss = total_loss
@@ -2318,13 +2318,15 @@ class Model(Network):
       if shuffle:
         training_utils.verify_dataset_shuffled(x)
 
-    if ops.executing_eagerly_outside_functions():
-      session = None
-    else:
-      session = K.get_session()
-
     strategy = self._distribution_strategy
     with strategy.scope():
+      # We should be sure to call get_session() inside the strategy.scope()
+      # so the strategy can affect the session options.
+      if ops.executing_eagerly_outside_functions():
+        session = None
+      else:
+        session = K.get_session()
+
       first_x_value = nest.flatten(x)[0]
       if isinstance(first_x_value, np.ndarray):
         x = distributed_training_utils.list_to_tuple(x)

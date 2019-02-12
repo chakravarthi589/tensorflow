@@ -27,6 +27,7 @@ from tensorflow.python.data.util import nest
 from tensorflow.python.data.util import structure
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
+from tensorflow.python.framework import errors
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_shape
@@ -717,10 +718,10 @@ class _RebatchDataset(dataset_ops.UnaryDataset):
       """Recalculates the output_shapes after dividing it by num_workers."""
       if len(output_shapes) < 1:
         raise ValueError("Input shape should have at least one dimension.")
-      if not output_shapes.dims[0].value:
-        raise ValueError("Cannot rebatch unknown batch size datasets.")
-      if output_shapes.dims[0].value % num_workers != 0:
-        raise ValueError(
+      if (output_shapes.dims[0].value and
+          output_shapes.dims[0].value % num_workers != 0):
+        raise errors.InvalidArgumentError(
+            None, None,
             "First dim of input shape: %d is not divisible by num_workers: %d" %
             (output_shapes[0], num_workers))
       output_dims = [d for d in output_shapes.dims]

@@ -33,11 +33,11 @@ from tensorflow.python.keras import callbacks
 from tensorflow.python.keras import metrics as metrics_module
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras.optimizer_v2 import optimizer_v2
+from tensorflow.python.keras.utils.mode_keys import ModeKeys
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import tf_logging as logging
-from tensorflow.python.training.mode_keys import ModeKeys
 from tensorflow.python.util import nest
 from tensorflow.python.util import tf_contextlib
 
@@ -67,7 +67,7 @@ def set_weights(distribution_strategy, dist_model, weights):
     weights = weights[num_param:]
 
   if not ops.executing_eagerly_outside_functions():
-    K.get_session().run(assign_ops)
+    K.get_session(assign_ops).run(assign_ops)
 
 
 def unwrap_values(distribution_strategy, grouped_inputs, grouped_outputs,
@@ -522,7 +522,7 @@ def initialize_iterator(iterator, distribution_strategy):
   with distribution_strategy.scope():
     init_op = control_flow_ops.group(iterator.initialize())
     if not context.executing_eagerly():
-      K.get_session().run(init_op)
+      K.get_session((init_op,)).run(init_op)
 
 
 def _get_input_from_iterator(iterator, model):
