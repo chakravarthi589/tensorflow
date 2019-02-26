@@ -128,6 +128,9 @@ load(
     "tf_additional_libdevice_srcs",
     "tf_additional_minimal_lib_srcs",
     "tf_additional_mpi_lib_defines",
+    "tf_additional_numa_deps",
+    "tf_additional_numa_lib_defines",
+    "tf_additional_numa_copts",
     "tf_additional_proto_hdrs",
     "tf_additional_proto_srcs",
     "tf_additional_test_deps",
@@ -146,6 +149,7 @@ load(
     "tf_protos_grappler",
     "tf_protos_grappler_impl",
     "tf_pyclif_proto_library",
+    "tf_grpc_service_all",
 )
 load(
     "//tensorflow/core:platform/default/build_config_root.bzl",
@@ -235,6 +239,8 @@ ADDITIONAL_CORE_PROTO_SRCS = [
     "protobuf/meta_graph.proto",
     "protobuf/named_tensor.proto",
     "protobuf/saved_model.proto",
+    "protobuf/saved_object_graph.proto",
+    "protobuf/struct.proto",
     "protobuf/tensorflow_server.proto",
     "protobuf/transport_options.proto",
     "util/test_log.proto",
@@ -385,15 +391,15 @@ cc_library(
         ":platform_port_hdrs",
         ":platform_port_internal_hdrs",
     ],
-    copts = tf_copts(),
+    copts = tf_copts() + tf_additional_numa_copts(),
     visibility = ["//tensorflow/core:__subpackages__"],
     deps = [
         ":lib_platform",
         ":platform_base",
-        "//tensorflow/core/platform/default/build_config:port",
         "@com_google_absl//absl/base",
+        "//tensorflow/core/platform/default/build_config:port",
         "@snappy",
-    ],
+    ] + tf_additional_numa_deps(),
 )
 
 filegroup(
@@ -435,6 +441,17 @@ cc_library(
         "//tensorflow/core/platform/default/build_config:protobuf",
         "@protobuf_archive//:protobuf",
     ],
+)
+
+cc_library(
+    name = "grpc_services",
+    srcs = [],
+    hdrs = [
+        "platform/grpc_services.h",
+    ],
+    copts = tf_copts(),
+    visibility = ["//visibility:public"],
+    deps = tf_grpc_service_all(),
 )
 
 cc_library(
@@ -954,7 +971,10 @@ tf_cuda_library(
         "util/mkl_util.h",
     ]),
     visibility = ["//visibility:public"],
-    deps = [":framework_internal"],
+    deps = [
+        ":framework_internal",
+        "@com_google_absl//absl/base",
+    ],
 )
 
 cc_library(
@@ -1423,7 +1443,7 @@ cc_library(
 # This includes implementations of all kernels built into TensorFlow.
 cc_library(
     name = "all_kernels_impl",
-    visibility = ["//visibility:private"],
+    visibility = ["//tensorflow/core:__subpackages__"],
     deps = [
         "//tensorflow/core/kernels:array",
         "//tensorflow/core/kernels:audio",
@@ -2261,11 +2281,14 @@ LIB_INTERNAL_PUBLIC_HEADERS = tf_additional_lib_hdrs() + [
 ]
 
 # Replicated for lib_internal and lib_internal_impl.
-LIB_INTERNAL_DEFINES = (tf_additional_lib_defines() + [
-                            "TF_USE_SNAPPY",
-                        ] + tf_additional_verbs_lib_defines() +
-                        tf_additional_mpi_lib_defines() +
-                        tf_additional_gdr_lib_defines())
+LIB_INTERNAL_DEFINES = (
+    tf_additional_lib_defines() + [
+        "TF_USE_SNAPPY",
+    ] + tf_additional_verbs_lib_defines() +
+    tf_additional_mpi_lib_defines() +
+    tf_additional_gdr_lib_defines() +
+    tf_additional_numa_lib_defines()
+)
 
 cc_library(
     name = "lib_internal",
@@ -2338,19 +2361,20 @@ cc_library(
     copts = tf_copts(),
     defines = LIB_INTERNAL_DEFINES,
     deps = tf_additional_lib_deps() + [
-        ":lib_hash_crc32c_accelerate_internal",
-        ":lib_proto_parsing",
-        ":abi",
-        ":core_stringpiece",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "//third_party/eigen3",
-        "//tensorflow/core/platform/default/build_config:platformlib",
-        "@snappy",
-        "@zlib_archive//:zlib",
-        "@double_conversion//:double-conversion",
-        "@protobuf_archive//:protobuf",
-    ] + tf_protos_all_impl() + tf_protos_grappler_impl(),
+               ":lib_hash_crc32c_accelerate_internal",
+               ":lib_proto_parsing",
+               ":abi",
+               ":core_stringpiece",
+               "@com_google_absl//absl/memory",
+               "@com_google_absl//absl/strings",
+               "//third_party/eigen3",
+               "//tensorflow/core/platform/default/build_config:platformlib",
+               "@snappy",
+               "@zlib_archive//:zlib",
+               "@double_conversion//:double-conversion",
+               "@protobuf_archive//:protobuf",
+           ] + tf_protos_all_impl() + tf_protos_grappler_impl() +
+           tf_additional_numa_deps(),
 )
 
 # File compiled with extra flags to get cpu-specific acceleration.
@@ -2774,6 +2798,7 @@ tf_cuda_library(
         ":stats_calculator_portable",
         ":version_lib",
         "@com_google_absl//absl/base",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
         "//tensorflow/core/platform/default/build_config:platformlib",
@@ -2992,6 +3017,7 @@ CORE_CPU_LIB_HEADERS = CORE_CPU_BASE_HDRS + [
     "common_runtime/lower_if_while.h",
     "common_runtime/lower_while_op.h",
     "common_runtime/memory_types.h",
+    "common_runtime/metrics.h",
     "common_runtime/mkl_cpu_allocator.h",
     "common_runtime/optimization_registry.h",
     "common_runtime/pending_counts.h",
@@ -3051,6 +3077,7 @@ tf_cuda_library(
         "common_runtime/lower_if_while.cc",
         "common_runtime/lower_while_op.cc",
         "common_runtime/memory_types.cc",
+        "common_runtime/metrics.cc",
         "common_runtime/mkl_cpu_allocator.cc",
         "common_runtime/optimization_registry.cc",
         "common_runtime/parallel_concat_optimizer.cc",
@@ -3123,7 +3150,6 @@ tf_cuda_library(
         ":framework",
         ":graph",
         ":lib",
-        ":metrics",
         ":proto_text",
         ":protos_all_cc",
         "//tensorflow/core/grappler:grappler_item",
@@ -3155,15 +3181,6 @@ cc_library(
 )
 
 tf_cuda_library(
-    name = "metrics",
-    srcs = ["common_runtime/metrics.cc"],
-    hdrs = ["common_runtime/metrics.h"],
-    deps = [
-        ":lib",
-    ],
-)
-
-tf_cuda_library(
     name = "direct_session_internal",
     srcs = ["common_runtime/direct_session.cc"],
     hdrs = [
@@ -3179,7 +3196,6 @@ tf_cuda_library(
         ":graph",
         ":lib",
         ":lib_internal",
-        ":metrics",
         ":proto_text",
         ":protos_all_cc",
         "//tensorflow/core/debug:debug_graph_utils",
@@ -3546,6 +3562,7 @@ tf_cc_tests(
         "platform/vmodule_benchmark_test.cc",
     ],
     deps = [
+        ":core_cpu_internal",
         ":lib",
         ":lib_internal",
         ":lib_test_internal",

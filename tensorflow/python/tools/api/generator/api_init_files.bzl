@@ -15,6 +15,7 @@ TENSORFLOW_API_INIT_FILES = [
     "debugging/__init__.py",
     "distribute/__init__.py",
     "distribute/cluster_resolver/__init__.py",
+    "distribute/experimental/__init__.py",
     "dtypes/__init__.py",
     "errors/__init__.py",
     "experimental/__init__.py",
@@ -27,6 +28,8 @@ TENSORFLOW_API_INIT_FILES = [
     "linalg/__init__.py",
     "lite/__init__.py",
     "lite/constants/__init__.py",
+    "lite/experimental/__init__.py",
+    "lite/experimental/nn/__init__.py",
     "math/__init__.py",
     "nest/__init__.py",
     "nn/__init__.py",
@@ -42,9 +45,11 @@ TENSORFLOW_API_INIT_FILES = [
     "sparse/__init__.py",
     "strings/__init__.py",
     "summary/__init__.py",
+    "summary/experimental/__init__.py",
     "sysconfig/__init__.py",
     "test/__init__.py",
     "train/__init__.py",
+    "train/experimental/__init__.py",
     "version/__init__.py",
     # END GENERATED FILES
 ]

@@ -38,6 +38,7 @@ pkg_tar(
     extension = "tar.gz",
     files = [
         "include/tensorflow/jni/LICENSE",
+        "//:LICENSE",
         "//tensorflow/java:libtensorflow_jni",
     ],
     # Mark as "manual" till
@@ -99,7 +100,10 @@ pkg_tar(
 
 pkg_tar(
     name = "clicenses",
-    files = [":include/tensorflow/c/LICENSE"],
+    files = [
+        ":include/tensorflow/c/LICENSE",
+        "//:LICENSE",
+    ],
     package_dir = "include/tensorflow/c",
     # Mark as "manual" till
     # https://github.com/bazelbuild/bazel/issues/2352
@@ -126,6 +130,7 @@ genrule(
         "@gemmlowp//:LICENSE",
         "@gif_archive//:COPYING",
         "@highwayhash//:LICENSE",
+        "@hwloc//:COPYING",
         "@icu//:icu4c/LICENSE",
         "@jpeg//:LICENSE.md",
         "@llvm//:LICENSE.TXT",
@@ -195,6 +200,7 @@ genrule(
         "@gemmlowp//:LICENSE",
         "@gif_archive//:COPYING",
         "@highwayhash//:LICENSE",
+        "@hwloc//:COPYING",
         "@icu//:icu4j/main/shared/licenses/LICENSE",
         "@jpeg//:LICENSE.md",
         "@llvm//:LICENSE.TXT",
