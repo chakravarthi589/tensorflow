@@ -72,7 +72,9 @@ from tensorflow.python.tpu import tpu_feed
 from tensorflow.python.tpu import tpu_function
 from tensorflow.python.tpu import training_loop
 from tensorflow.python.tpu import util as util_lib
+from tensorflow.python.tpu._tpu_estimator_embedding import AdagradParameters  # pylint: disable=unused-import
 from tensorflow.python.tpu._tpu_estimator_embedding import AdamParameters  # pylint: disable=unused-import
+from tensorflow.python.tpu._tpu_estimator_embedding import StochasticGradientDescentParameters  # pylint: disable=unused-import
 from tensorflow.python.tpu._tpu_estimator_embedding import EmbeddingConfigSpec  # pylint: disable=unused-import
 from tensorflow.python.tpu.ops import tpu_ops
 from tensorflow.python.training import basic_session_run_hooks
@@ -2475,6 +2477,7 @@ class TPUEstimator(estimator_lib.Estimator):
       if self._experimental_exported_model_uses_all_cores:
         tensors_on_cpu = tpu.rewrite(
             tpu_computation, device_assignment=device_assignment)
+        tpu.prune_unconnected_ops_from_xla(ops.get_default_graph())
       else:
         tensors_on_cpu = tpu.rewrite_for_inference(
             tpu_computation, device_assignment=device_assignment)

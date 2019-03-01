@@ -2551,6 +2551,12 @@ class Operation(object):
     shapes_list = attr_value_pb2.AttrValue.ListValue(shape=shapes)
     self._set_attr(attr_name, attr_value_pb2.AttrValue(list=shapes_list))
 
+  def _clear_attr(self, attr_name):
+    """Private method used to clear an attribute in the node_def."""
+    # pylint: disable=protected-access
+    c_api.ClearAttr(self._graph._c_graph, self._c_op, attr_name)
+    # pylint: enable=protected-access
+
   def get_attr(self, name):
     """Returns the value of the attr of this op with the given `name`.
 
@@ -5717,7 +5723,7 @@ def disable_eager_execution():
   context.default_execution_mode = context.GRAPH_MODE
   c = context.context_safe()
   if c is not None:
-    c._eager_context.is_eager = False  # pylint: disable=protected-access
+    c._thread_local_data.is_eager = False  # pylint: disable=protected-access
 
 
 def enable_eager_execution_internal(config=None,

@@ -39,6 +39,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/buffer_assignment.h"
 #include "tensorflow/compiler/xla/service/dfs_hlo_visitor.h"
 #include "tensorflow/compiler/xla/service/gpu/buffer_allocations.h"
+#include "tensorflow/compiler/xla/service/gpu/cholesky_thunk.h"
 #include "tensorflow/compiler/xla/service/gpu/conditional_thunk.h"
 #include "tensorflow/compiler/xla/service/gpu/convolution_thunk.h"
 #include "tensorflow/compiler/xla/service/gpu/copy_thunk.h"
@@ -477,6 +478,51 @@ Status IrEmitterUnnested::HandleCustomCall(HloInstruction* custom_call) {
     AddThunkToThunkSequence(absl::make_unique<ConvolutionThunk>(
         Cast<HloCustomCallInstruction>(custom_call), std::move(operand_slices),
         conv_result_slice, scratch_slice, tuple_result_slice));
+    return Status::OK();
+  }
+
+  if (custom_call->custom_call_target() == kCusolverCholeskyCallTarget) {
+    TF_ASSIGN_OR_RETURN(CholeskyOptions options,
+                        custom_call->backend_config<CholeskyOptions>());
+
+    const Shape& shape = custom_call->operand(0)->shape();
+    int ndim = shape.dimensions_size();
+    CHECK_GE(ndim, 2);
+    int64 n = shape.dimensions(ndim - 1);
+
+    const auto& dims = shape.dimensions();
+    int64 batch_size = std::accumulate(dims.begin(), dims.end() - 2, int64{1},
+                                       [](int64 a, int64 b) { return a * b; });
+
+    auto operand_buffer = GetAllocationSlice(*custom_call->operand(0));
+
+    const auto& assn = ir_emitter_context_->buffer_assignment();
+    auto a_buffer = assn.GetUniqueSlice(custom_call, {0}).ValueOrDie();
+    auto workspace_buffer = assn.GetUniqueSlice(custom_call, {1}).ValueOrDie();
+    auto info_buffer = assn.GetUniqueSlice(custom_call, {2}).ValueOrDie();
+
+    std::vector<std::unique_ptr<Thunk>> thunks;
+
+    if (operand_buffer != a_buffer) {
+      thunks.push_back(absl::make_unique<DeviceToDeviceCopyThunk>(
+          /*source_address=*/operand_buffer,
+          /*destination_buffer=*/a_buffer,
+          /*mem_size=*/ShapeUtil::ByteSizeOf(shape), custom_call));
+    }
+
+    thunks.push_back(absl::make_unique<CholeskyThunk>(
+        options, a_buffer, workspace_buffer, info_buffer,
+        custom_call->operand(0)->shape().element_type(), batch_size, n,
+        custom_call));
+
+    // Elide the sequential thunk if there's no copy.
+    if (thunks.size() == 1) {
+      AddThunkToThunkSequence(std::move(thunks[0]));
+    } else {
+      AddThunkToThunkSequence(
+          absl::make_unique<SequentialThunk>(std::move(thunks), custom_call));
+    }
+
     return Status::OK();
   }
 
@@ -2024,41 +2070,32 @@ Status CheckWhileBuffersShareAllocation(
 // Checks that the buffers used in a conditional instruction are shared with the
 // operands and result as follows:
 //   * The result buffer of the conditional should share the allocation with the
-//     result buffers of the true and false computations.
-//   * The buffer of operand 1 should share the allocation with the buffer of
-//     the parameter 0 instruction of the true computation.
-//   * The buffer of operand 2 should share the allocation with the buffer of
-//     the parameter 0 instruction of the false computation.
+//     result buffers of each branch computation.
+//   * The buffer of operand b+1 should share the allocation with the buffer of
+//     the parameter 0 instruction of the b'th computation.
 Status CheckConditionalBuffersShareAllocation(
     const HloInstruction* conditional,
     const BufferAssignment& buffer_assignment) {
   TF_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
       conditional->shape(),
       [&](const Shape& /*subshape*/, const ShapeIndex& index) -> Status {
-        TF_RETURN_IF_ERROR(CheckHloBuffersShareAllocation(
-            conditional, conditional->true_computation()->root_instruction(),
-            index, buffer_assignment));
-        TF_RETURN_IF_ERROR(CheckHloBuffersShareAllocation(
-            conditional, conditional->false_computation()->root_instruction(),
-            index, buffer_assignment));
+        for (auto branch_computation : conditional->branch_computations()) {
+          TF_RETURN_IF_ERROR(CheckHloBuffersShareAllocation(
+              conditional, branch_computation->root_instruction(), index,
+              buffer_assignment));
+        }
         return Status::OK();
       }));
-  TF_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
-      conditional->operand(1)->shape(),
-      [&](const Shape& /*subshape*/, const ShapeIndex& index) -> Status {
-        return CheckHloBuffersShareAllocation(
-            conditional->operand(1),
-            conditional->true_computation()->parameter_instruction(0), index,
-            buffer_assignment);
-      }));
-  TF_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
-      conditional->operand(2)->shape(),
-      [&](const Shape& /*subshape*/, const ShapeIndex& index) -> Status {
-        return CheckHloBuffersShareAllocation(
-            conditional->operand(2),
-            conditional->false_computation()->parameter_instruction(0), index,
-            buffer_assignment);
-      }));
+  for (int j = 0; j < conditional->branch_count(); ++j) {
+    TF_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
+        conditional->operand(j + 1)->shape(),
+        [&](const Shape& /*subshape*/, const ShapeIndex& index) -> Status {
+          return CheckHloBuffersShareAllocation(
+              conditional->operand(j + 1),
+              conditional->branch_computation(j)->parameter_instruction(0),
+              index, buffer_assignment);
+        }));
+  }
   return Status::OK();
 }
 
@@ -2111,22 +2148,20 @@ std::unique_ptr<Thunk> IrEmitterUnnested::BuildConditionalThunk(
   TF_CHECK_OK(CheckConditionalBuffersShareAllocation(
       hlo, ir_emitter_context_->buffer_assignment()));
 
-  HloComputation* true_computation = hlo->true_computation();
-  IrEmitterUnnested ir_emitter_true(hlo_module_config_, true_computation,
-                                    ir_emitter_context_);
-  TF_CHECK_OK(true_computation->Accept(&ir_emitter_true));
-
-  HloComputation* false_computation = hlo->false_computation();
-  IrEmitterUnnested ir_emitter_false(hlo_module_config_, false_computation,
-                                     ir_emitter_context_);
-  TF_CHECK_OK(false_computation->Accept(&ir_emitter_false));
+  std::vector<BufferAllocation::Slice> branch_operands;
+  std::vector<ThunkSequence> branch_thunks;
+  for (int j = 0; j < hlo->branch_count(); ++j) {
+    branch_operands.emplace_back(GetAllocationSlice(*hlo->operand(j + 1)));
+    HloComputation* branch_computation = hlo->branch_computation(j);
+    IrEmitterUnnested ir_emitter(hlo_module_config_, branch_computation,
+                                 ir_emitter_context_);
+    TF_CHECK_OK(branch_computation->Accept(&ir_emitter));
+    branch_thunks.push_back(std::move(*ir_emitter.ConsumeThunkSequence()));
+  }
 
   return absl::make_unique<ConditionalThunk>(
-      GetAllocationSlice(*hlo->operand(0)),
-      GetAllocationSlice(*hlo->operand(1)),
-      GetAllocationSlice(*hlo->operand(2)),
-      std::move(*ir_emitter_true.ConsumeThunkSequence()),
-      std::move(*ir_emitter_false.ConsumeThunkSequence()), hlo);
+      GetAllocationSlice(*hlo->operand(0)), branch_operands,
+      std::move(branch_thunks), hlo);
 }
 
 Status IrEmitterUnnested::EmitTargetElementLoopInThunk(

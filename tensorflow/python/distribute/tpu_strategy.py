@@ -21,8 +21,6 @@ from __future__ import print_function
 import collections
 import copy
 
-from tensorflow.core.protobuf import config_pb2
-from tensorflow.python.client import session as session_lib
 from tensorflow.python.distribute import cross_device_ops as cross_device_ops_lib
 from tensorflow.python.distribute import device_util
 from tensorflow.python.distribute import distribute_lib
@@ -32,7 +30,6 @@ from tensorflow.python.distribute import reduce_util
 from tensorflow.python.distribute import values
 from tensorflow.python.distribute.cluster_resolver import TPUClusterResolver
 from tensorflow.python.eager import context
-from tensorflow.python.eager import function
 from tensorflow.python.eager import tape
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import device as tf_device
@@ -43,64 +40,14 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import variable_scope as vs
-from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.tpu import device_assignment as device_assignment_lib
-from tensorflow.python.tpu import functional as tpu_functional_ops
-from tensorflow.python.tpu import topology
 from tensorflow.python.tpu import tpu
+from tensorflow.python.tpu import tpu_strategy_util
 from tensorflow.python.tpu import tpu_system_metadata as tpu_system_metadata_lib
 from tensorflow.python.tpu import training_loop
 from tensorflow.python.tpu.ops import tpu_ops
-from tensorflow.python.util import compat
 from tensorflow.python.util import nest
-
-
-def initialize_tpu_system(cluster_resolver=None):
-  """Initialize the TPU devices in a separate session and graph.
-
-  Args:
-    cluster_resolver: A tf.distribute.cluster_resolver.TPUClusterResolver,
-        which provides information about the TPU cluster.
-  Returns:
-    The tf.tpu.Topology object for the topology of the TPU cluster.
-  """
-  if cluster_resolver is None:
-    cluster_resolver = TPUClusterResolver("")
-  master = cluster_resolver.master()
-
-  logging.info("Initializing the TPU system.")
-
-  if context.executing_eagerly():
-    # This function looks as it is for the following non-intuitive reasons.
-    # tpu.initialize_system creates a dummy op whose sole purpose is to trigger
-    # DistributedTPURewritePass. This pass actually adds real ops that
-    # initialize the TPU system. Thus, we can't simply run tpu.initialize_system
-    # eagerly. We need to wrap it in defun and trigger the rewrite passes on it.
-    # The easiest way to trigger a rewrite is to run the function with
-    # TPUPartitionedCallOp.
-    @function.defun
-    def _tpu_init_fn():
-      return tpu.initialize_system()
-
-    # We can't call _tpu_init_fn normally (because it contains just a dummy op,
-    # see above) but need to define it to get it added to eager context
-    # and get its assigned name.
-    # pylint: disable=protected-access
-    graph_func = _tpu_init_fn._get_concrete_function_internal()
-    func_name = compat.as_str(graph_func._inference_function.name)
-    # pylint: enable=protected-access
-
-    output = tpu_functional_ops.TPUPartitionedCall(
-        args=[], device_ordinal=0, Tout=[dtypes.string], f=func_name)
-    serialized_topology = output[0].numpy()
-  else:
-    session_config = config_pb2.ConfigProto(allow_soft_placement=True)
-    with ops.Graph().as_default():
-      with session_lib.Session(config=session_config, target=master) as sess:
-        serialized_topology = sess.run(tpu.initialize_system())
-
-  logging.info("Finished initializing TPU system.")
-  return topology.Topology(serialized=serialized_topology)
+from tensorflow.python.util.tf_export import tf_export
 
 
 def get_tpu_system_metadata(tpu_cluster_resolver):
@@ -174,6 +121,7 @@ def _create_tpu_mirrored_variable(  # pylint: disable=missing-docstring
   return result
 
 
+@tf_export("distribute.experimental.TPUStrategy")
 class TPUStrategy(distribute_lib.DistributionStrategy):
   """TPU distribution strategy implementation."""
 
@@ -287,7 +235,8 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
         d.name: i for i, d in enumerate(self._tpu_metadata.devices)
         if "device:TPU:" in d.name
     }
-    self._host_device = self.get_host_cpu_device(0)
+    self._host_device = tpu_strategy_util.get_first_tpu_host_device(
+        self._tpu_cluster_resolver)
     self._tpu_devices = tuple(sorted(self._device_index.keys()))
     # Only create variables for the number of replicas we're running.
     self._tpu_devices = self._tpu_devices[:self._num_replicas_in_sync]
@@ -310,67 +259,6 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
   def _validate_colocate_with_variable(self, colocate_with_variable):
     values.validate_colocate_tpu_variable(colocate_with_variable, self)
 
-  def _get_enqueue_op_per_host(self, host_id, multi_worker_iterator,
-                               input_shapes, iterations):
-    """Create an enqueue op for a single host identified using host_id.
-
-    The while_loop op returned will run `iterations` times and in each run
-    enqueue batches for each shard.
-
-    Args:
-      host_id: integer, id of the host to run the enqueue ops on.
-      multi_worker_iterator: MultiWorkerDataIterator to read the input data.
-      input_shapes: shape of inputs to be enqueue on the queue. This is same as
-        the value of `nest.flatten(iterator.output_shapes)`.
-      iterations: integer, number of iterations to be run; determines the
-        number of batches to be enqueued.
-
-    Returns:
-      while_loop_op running `iterations` times; in each run we enqueue a batch
-      on the infeed queue from the host with id `host_id` for each device shard.
-    """
-    host = self.get_host_cpu_device(host_id)
-    # TODO(sourabhbajaj): Possibly make changes to MultiWorkerDataset
-    # to work with TPU Prefetch so clean up this code.
-    iterator = (
-        multi_worker_iterator.get_iterator(self.get_host(host_id))._iterator)  # pylint: disable=protected-access
-
-    def _infeed_enqueue_ops_fn():
-      """Enqueue ops for one iteration."""
-      control_deps = []
-      sharded_inputs = []
-      enqueue_ops = []
-
-      with ops.device(host):
-        for _ in range(self.num_replicas_per_host):
-          # Use control dependencies to ensure a deterministic ordering.
-          with ops.control_dependencies(control_deps):
-            inputs = nest.flatten(iterator.get_next())
-            control_deps.extend(inputs)
-            sharded_inputs.append(inputs)
-
-      for core_id, shard_input in enumerate(sharded_inputs):
-        enqueue_ops.append(
-            tpu_ops.infeed_enqueue_tuple(
-                inputs=shard_input,
-                shapes=input_shapes,
-                device_ordinal=core_id))
-      return enqueue_ops
-
-    def enqueue_ops_loop_body(i):
-      """Callable for the loop body of the while_loop instantiated below."""
-      with ops.control_dependencies(_infeed_enqueue_ops_fn()):
-        return i + 1
-
-    with ops.device(host):
-      enqueue_op_per_host = control_flow_ops.while_loop(
-          lambda i: i < iterations,
-          enqueue_ops_loop_body,
-          [constant_op.constant(0)],
-          parallel_iterations=1)
-
-    return enqueue_op_per_host
-
   def _make_dataset_iterator(self, dataset):
     """Make iterators for each of the TPU hosts."""
     return input_lib.DatasetIterator(dataset, self._input_workers,
@@ -392,7 +280,7 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
 
   def _experimental_make_numpy_dataset(self, numpy_input, session):
     return numpy_dataset.one_host_numpy_dataset(
-        numpy_input, numpy_dataset.SingleDevice(self.get_host_cpu_device(0)),
+        numpy_input, numpy_dataset.SingleDevice(self._host_device),
         session)
 
   # TODO(priyag): Deal with OutOfRange errors once b/111349762 is fixed.
@@ -460,8 +348,8 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
     assert isinstance(initial_loop_values, list)
     initial_loop_values = initial_loop_values * self._num_replicas_in_sync
 
-    # Put the while loop op on host 0.
-    with ops.device(self.get_host_cpu_device(0)):
+    # Put the while loop op on TPU host 0.
+    with ops.device(self._host_device):
       replicate_outputs = training_loop.repeat(iterations, rewrite_fn,
                                                initial_loop_values)
 
@@ -506,7 +394,7 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
     This is a private method only to be used by Estimator. Other frameworks
     should directly be calling `tf.contrib.distribute.initialize_tpu_system`
     """
-    initialize_tpu_system(self._tpu_cluster_resolver)
+    tpu_strategy_util.initialize_tpu_system(self._tpu_cluster_resolver)
 
   def _create_variable(self, next_creator, *args, **kwargs):
     """Create a TPUMirroredVariable. See `DistributionStrategy.scope`."""
@@ -704,15 +592,6 @@ class TPUExtended(distribute_lib.DistributionStrategyExtended):
         return result
       else:
         return nest.map_structure(self._unwrap, result)
-
-  def get_host(self, host_id):
-    if self._tpu_cluster_resolver.get_master() in ("", "local"):
-      return "/replica:0/task:0"
-    job_name = self._tpu_cluster_resolver.get_job_name() or "tpu_worker"
-    return "/job:%s/task:%d" % (job_name, host_id)
-
-  def get_host_cpu_device(self, host_id):
-    return self.get_host(host_id) + "/device:CPU:0"
 
   def _configure(self,
                  session_config=None,
