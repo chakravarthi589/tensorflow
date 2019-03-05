@@ -310,7 +310,8 @@ class Layer(trackable.Trackable):
       ValueError: When giving unsupported dtype and no initializer or when
         trainable has been set to True with synchronization set as `ON_READ`.
     """
-    shape = shape or ()
+    if shape is None:
+      shape = ()
     # Validate optional keyword arguments.
     for kwarg in kwargs:
       if kwarg not in ['getter', 'collections', 'experimental_autocast']:
@@ -1719,7 +1720,7 @@ class Layer(trackable.Trackable):
     output_shapes = self.compute_output_shape(input_shapes)
 
     def _make_placeholder_like(shape):
-      ph = backend.placeholder(shape, self.dtype)
+      ph = backend.placeholder(shape=shape, dtype=self.dtype)
       ph._keras_mask = None
       return ph
 
