@@ -7655,8 +7655,9 @@ type RegexReplaceAttr func(optionalAttr)
 
 // RegexReplaceReplaceGlobal sets the optional replace_global attribute to value.
 //
-// value: If True, the replacement is global, otherwise the replacement
-// is done only on the first match.
+// value: If True, the replacement is global (that is, all matches of the `pattern` regular
+// expression in each input string are rewritten), otherwise the `rewrite`
+// substitution is only made for the first `pattern` match.
 // If not specified, defaults to true
 func RegexReplaceReplaceGlobal(value bool) RegexReplaceAttr {
 	return func(m optionalAttr) {
@@ -7664,16 +7665,18 @@ func RegexReplaceReplaceGlobal(value bool) RegexReplaceAttr {
 	}
 }
 
-// Replaces the match of pattern in input with rewrite.
+// Replaces matches of the `pattern` regular expression in `input` with the
+// replacement string provided in `rewrite`.
 //
 // It follows the re2 syntax (https://github.com/google/re2/wiki/Syntax)
 //
 // Arguments:
 //	input: The text to be processed.
-//	pattern: The regular expression to match the input.
-//	rewrite: The rewrite to be applied to the matched expression.
+//	pattern: The regular expression to be matched in the `input` strings.
+//	rewrite: The rewrite string to be substituted for the `pattern` expression where it is
+// matched in the `input` strings.
 //
-// Returns The text after applying pattern and rewrite.
+// Returns The text after applying pattern match and rewrite substitution.
 func RegexReplace(scope *Scope, input tf.Output, pattern tf.Output, rewrite tf.Output, optional ...RegexReplaceAttr) (output tf.Output) {
 	if scope.Err() != nil {
 		return
@@ -8512,9 +8515,10 @@ func Equal(scope *Scope, x tf.Output, y tf.Output) (z tf.Output) {
 // The polygamma function is defined as:
 //
 //
-// \\(\psi^{(n)}(x) = \frac{d^n}{dx^n} \psi(x)\\)
+// \\(\psi^{(a)}(x) = \frac{d^a}{dx^a} \psi(x)\\)
 //
 // where \\(\psi(x)\\) is the digamma function.
+// The polygamma function is defined only for non-negative integer orders \\a\\.
 func Polygamma(scope *Scope, a tf.Output, x tf.Output) (z tf.Output) {
 	if scope.Err() != nil {
 		return

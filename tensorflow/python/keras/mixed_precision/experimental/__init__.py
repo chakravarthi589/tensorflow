@@ -1,4 +1,4 @@
-# Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,30 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Tests of functions that use list literals."""
-
+"""Mixed precision API."""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensorflow as tf
-
-from tensorflow.python import autograph as ag
-
-
-def list_used_as_tuple():
-  return tf.constant([1, 2, 3])
-
-
-class ListLiteralsTest(tf.test.TestCase):
-
-  def test_basic(self):
-    converted = ag.to_graph(list_used_as_tuple)
-    result = converted()
-
-    with self.cached_session() as sess:
-      self.assertAllEqual(self.evaluate(result), [1, 2, 3])
-
-
-if __name__ == '__main__':
-  tf.test.main()
+from tensorflow.python.keras.mixed_precision.experimental.loss_scale_optimizer import LossScaleOptimizer
+from tensorflow.python.keras.mixed_precision.experimental.policy import global_policy
+from tensorflow.python.keras.mixed_precision.experimental.policy import Policy
+from tensorflow.python.keras.mixed_precision.experimental.policy import set_policy

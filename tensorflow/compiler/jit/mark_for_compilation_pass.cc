@@ -31,7 +31,6 @@ limitations under the License.
 #include "tensorflow/compiler/jit/union_find.h"
 #include "tensorflow/compiler/jit/xla_cluster_util.h"
 #include "tensorflow/compiler/tf2xla/const_analysis.h"
-#include "tensorflow/compiler/tf2xla/dump_graph.h"
 #include "tensorflow/compiler/tf2xla/resource_operation_table.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
 #include "tensorflow/compiler/xla/util.h"
@@ -48,6 +47,7 @@ limitations under the License.
 #include "tensorflow/core/lib/gtl/cleanup.h"
 #include "tensorflow/core/lib/strings/stringprintf.h"
 #include "tensorflow/core/public/version.h"
+#include "tensorflow/core/util/dump_graph.h"
 
 namespace tensorflow {
 
@@ -1098,7 +1098,11 @@ Status MarkForCompilationPass::RunImpl(
   }
 
   GraphCycles cycles;
-  TF_RETURN_IF_ERROR(CreateCycleDetectionGraph(graph, &cycles));
+  TF_ASSIGN_OR_RETURN(bool cycle_detection_graph_ok,
+                      CreateCycleDetectionGraph(graph, &cycles));
+  if (!cycle_detection_graph_ok) {
+    return Status::OK();
+  }
   TF_RETURN_IF_ERROR(AdjustCycleDetectionGraphForResourceOps(
       graph, options.flib_def, IgnoreResourceOpForSafetyAnalysis, &cycles));
 
@@ -1273,8 +1277,8 @@ Status MarkForCompilationPass::RunImpl(
   std::unordered_map<int, string> cluster_names;
 
   if (flags->tf_xla_clustering_debug) {
-    dump_graph::DumpGraphToFile("before_mark_for_compilation", **options.graph,
-                                options.flib_def);
+    DumpGraphToFile("before_mark_for_compilation", **options.graph,
+                    options.flib_def);
   }
 
   absl::flat_hash_map<int, std::pair<bool, string>>
@@ -1326,8 +1330,7 @@ Status MarkForCompilationPass::RunImpl(
   }
 
   if (flags->tf_xla_clustering_debug) {
-    dump_graph::DumpGraphToFile("mark_for_compilation", **options.graph,
-                                options.flib_def);
+    DumpGraphToFile("mark_for_compilation", **options.graph, options.flib_def);
 
     // We also dump out an annoated version of the TF graph where the nodes
     // names are prefixed with the cluster names.  This can help visualizing the
@@ -1349,8 +1352,8 @@ Status MarkForCompilationPass::RunImpl(
       }
     }
 
-    dump_graph::DumpGraphToFile("mark_for_compilation_annotated", new_graph,
-                                options.flib_def);
+    DumpGraphToFile("mark_for_compilation_annotated", new_graph,
+                    options.flib_def);
   }
 
   VLogClusteringSummary(*graph);
