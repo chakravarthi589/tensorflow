@@ -263,12 +263,7 @@ int64 ByteSizeOf(const Shape& shape, const llvm::DataLayout& data_layout);
 
 // Gets an llvm::FastMathFlags that reflects the settings in the given
 // module config.
-llvm::FastMathFlags GetFastMathFlags(bool fast_math_enabled);
-
-// Sets values in the given TargetOptions struct according to the given
-// compilation options.
-void SetTargetOptions(bool fast_math_enabled,
-                      llvm::TargetOptions* target_options);
+llvm::FastMathFlags GetCpuFastMathFlags(const HloModuleConfig& module_config);
 
 // Computes a conservative union of the metadata in "a" and "b".  For
 // aliasing-related metadata, this means the result can be applied to
@@ -278,19 +273,19 @@ std::map<int, llvm::MDNode*> MergeMetadata(
     llvm::LLVMContext* context, const std::map<int, llvm::MDNode*>& a,
     const std::map<int, llvm::MDNode*>& b);
 
-// Dumps out `llvm_module` to a file in the directory named `directory_name`,
-// creating the directory if necessary.  A sanitized version of
-// `hlo_module_name` is incorporated into the file name.  If `optimized` is true
-// then a suffix of "-with-opt.ll" is used, else a suffix of "-no-opt.ll" is
-// used.
-Status DumpIRToDirectory(const string& directory_name,
-                         const string& hlo_module_name,
-                         const llvm::Module& llvm_module, bool optimized);
+// Dumps out `llvm_module` to the path specified in DebugOptions, if dumping is
+// enabled for the given HLO module.
+//
+// A sanitized version of `hlo_module_name` is incorporated into the file name.
+// If `optimized` is true then a suffix of "-with-opt.ll" is used, else a suffix
+// of "-no-opt.ll" is used.
+void DumpIrIfEnabled(const HloModule& hlo_module,
+                     const llvm::Module& llvm_module, bool optimized);
 
-llvm::Function* CreateFunction(llvm::FunctionType* function_type,
-                               llvm::GlobalValue::LinkageTypes linkage,
-                               bool enable_fast_math, bool optimize_for_size,
-                               absl::string_view name, llvm::Module* module);
+llvm::Function* CreateCpuFunction(llvm::FunctionType* function_type,
+                                  llvm::GlobalValue::LinkageTypes linkage,
+                                  const HloModuleConfig& module_config,
+                                  absl::string_view name, llvm::Module* module);
 
 // Extracts the xla_backend_extra_options from `config` and passes those that
 // don't start with xla_ to LLVM.

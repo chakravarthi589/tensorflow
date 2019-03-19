@@ -88,23 +88,33 @@ class ControlFlowTransformer(converter.Base):
       return templates.replace(
           template, body_name=body_name, body=body, return_stmt=return_stmt)
 
-  def _create_cond_expr(self, results, test, body_name, orelse_name):
+  def _create_cond_expr(self, results, test, body_name, orelse_name,
+                        state_getter_name,
+                        state_setter_name):
     if results is not None:
       template = """
-        results = ag__.if_stmt(test, body_name, orelse_name)
+        results = ag__.if_stmt(test, body_name, orelse_name,
+                               state_getter_name, state_setter_name)
       """
       return templates.replace(
           template,
           test=test,
           results=results,
           body_name=body_name,
-          orelse_name=orelse_name)
+          orelse_name=orelse_name,
+          state_getter_name=state_getter_name,
+          state_setter_name=state_setter_name)
     else:
       template = """
-        ag__.if_stmt(test, body_name, orelse_name)
+        ag__.if_stmt(test, body_name, orelse_name, getter_name, setter_name)
       """
       return templates.replace(
-          template, test=test, body_name=body_name, orelse_name=orelse_name)
+          template,
+          test=test,
+          body_name=body_name,
+          orelse_name=orelse_name,
+          getter_name=state_getter_name,
+          setter_name=state_setter_name)
 
   def _fmt_symbols(self, symbol_set):
     if not symbol_set:
@@ -117,26 +127,50 @@ class ControlFlowTransformer(converter.Base):
     else:
       block_live_in = set()
 
-    # For the purpose of aliasing, composite symbols with live owners are live
-    # as well. Otherwise this would leak tensors from the conditional's body.
-    #
-    # For example:
-    #
-    #   obj = some_obj
-    #   if cond:
-    #     obj.a = val
-    #
-    # Thanslating to the code below would be incorrect:
-    #
-    #   def true_fn():
-    #     obj.a = val()  # Wrong! leaks ops owned by true_fn
-    #     return obj.a
-    for s in scope.modified:
-      if s.is_composite():
-        live_parents = block_live_in & s.owner_set
-        if live_parents:
-          block_live_in.add(s)
-    return scope.modified & node_defined_in & block_live_in
+    modified_live = scope.modified & node_defined_in & block_live_in
+    # Composite symbols are handled elsewhere see _create_state_functions
+    return {s for s in modified_live if not s.is_composite()}
+
+  def _create_state_functions(self, composites,
+                              state_getter_name, state_setter_name):
+    if composites:
+      composite_tuple = tuple(composites)
+      template = """
+        def state_getter_name():
+          return composite_tuple,
+        def state_setter_name(vals):
+          composite_tuple, = vals
+      """
+      node = templates.replace(
+          template,
+          state_getter_name=state_getter_name,
+          state_setter_name=state_setter_name,
+          composite_tuple=composite_tuple)
+    else:
+      template = """
+        def state_getter_name():
+          return ()
+        def state_setter_name(_):
+          pass
+        """
+      node = templates.replace(
+          template,
+          state_getter_name=state_getter_name,
+          state_setter_name=state_setter_name)
+
+    return node
+
+  def _create_undefined_assigns(self, undefined_symbols):
+    assignments = []
+    for s in undefined_symbols:
+      template = '''
+        var = ag__.Undefined(symbol_name)
+      '''
+      assignments += templates.replace(
+          template,
+          var=s,
+          symbol_name=gast.Str(s.ssf()))
+    return assignments
 
   def visit_If(self, node):
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
@@ -156,14 +190,16 @@ class ControlFlowTransformer(converter.Base):
 
     modified_in_cond = body_scope.modified | orelse_scope.modified
     returned_from_cond = set()
+    composites = set()
     for s in modified_in_cond:
-      if s in live_out:
+      if s in live_out and not s.is_composite():
         returned_from_cond.add(s)
-      elif s.is_composite():
-        # Special treatment for compound objects: if any of their owner entities
-        # are live, then they are outputs as well.
-        if live_out & s.owner_set:
-          returned_from_cond.add(s)
+      if s.is_composite():
+        # Special treatment for compound objects, always return them.
+        # This allows special handling within the if_stmt itself.
+        # For example, in TensorFlow we need to restore the state of composite
+        # symbols to ensure that only effects from the executed branch are seen.
+        composites.add(s)
 
     created_in_body = body_scope.modified & returned_from_cond - defined_in
     created_in_orelse = orelse_scope.modified & returned_from_cond - defined_in
@@ -202,6 +238,9 @@ class ControlFlowTransformer(converter.Base):
     cond_var_name = self.ctx.namer.new_symbol('cond', body_scope.referenced)
     body_name = self.ctx.namer.new_symbol('if_true', body_scope.referenced)
     orelse_name = self.ctx.namer.new_symbol('if_false', orelse_scope.referenced)
+    all_referenced = body_scope.referenced | orelse_scope.referenced
+    state_getter_name = self.ctx.namer.new_symbol('get_state', all_referenced)
+    state_setter_name = self.ctx.namer.new_symbol('set_state', all_referenced)
 
     returned_from_cond = tuple(returned_from_cond)
     if returned_from_cond:
@@ -245,27 +284,15 @@ class ControlFlowTransformer(converter.Base):
         body=node_orelse,
         returns=returned_from_orelse)
     undefined_assigns = self._create_undefined_assigns(possibly_undefined)
+    composite_defs = self._create_state_functions(
+        composites, state_getter_name, state_setter_name)
 
     cond_expr = self._create_cond_expr(cond_results, cond_var_name, body_name,
-                                       orelse_name)
+                                       orelse_name, state_getter_name,
+                                       state_setter_name)
 
-    return (undefined_assigns
-            + cond_assign
-            + body_def
-            + orelse_def
-            + cond_expr)
-
-  def _create_undefined_assigns(self, undefined_symbols):
-    assignments = []
-    for s in undefined_symbols:
-      template = '''
-        var = ag__.Undefined(symbol_name)
-      '''
-      assignments += templates.replace(
-          template,
-          var=s,
-          symbol_name=gast.Str(s.ssf()))
-    return assignments
+    return (undefined_assigns + cond_assign + composite_defs + body_def +
+            orelse_def + cond_expr)
 
   def _get_loop_state(self, node):
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
