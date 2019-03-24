@@ -5965,7 +5965,12 @@ filegroup(
             "cwise_ops_sycl_common.h",
             "nextafter_op.cc",
         ] + ANDROID_TEXTUAL_HDRS,
-    ),
+    ) + [
+        # Referenced by stateful_random_ops.cc but excluded with the *gpu*
+        # rule above. Seems to have only have worked before because of
+        # hdrs_check loose.
+        "stateful_random_ops_cpu_gpu.h",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -6382,10 +6387,9 @@ tf_cc_test(
 )
 
 tf_cc_test_mkl(
-    name = "mkl_quantized_conv_ops_test",
+    name = "mkl_quantized_conv_ops_perchannel_test",
     size = "small",
-    srcs = ["mkl_quantized_conv_ops_test.cc"],
-    tags = ["nomsan"],  # http://b/32242946
+    srcs = ["mkl_quantized_conv_ops_perchannel_test.cc"],
     deps = [
         ":mkl_conv_op",
         ":mkl_input_conversion_op",
@@ -6513,6 +6517,43 @@ tf_cc_test(
         ":ops_util",
         ":quantization_utils",
         ":quantized_ops",
+        "//tensorflow/core:array_ops_op_lib",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:math_ops_op_lib",
+        "//tensorflow/core:nn_ops_op_lib",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
+    ],
+)
+
+tf_mkl_kernel_library(
+    name = "mkl_quantize_op",
+    srcs = ["mkl_quantize_op.cc"],
+    hdrs = [
+        "meta_support.h",
+        "reference_gemm.h",
+    ],
+    deps = [
+        ":bounds_check",
+        ":ops_util",
+        "//tensorflow/core:core_cpu",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:lib_internal",
+        "@gemmlowp",
+    ] + mkl_deps(),
+)
+
+tf_cc_test_mkl(
+    name = "mkl_quantize_op_test",
+    size = "small",
+    srcs = ["mkl_quantize_op_test.cc"],
+    deps = [
+        ":mkl_quantize_op",
+        ":ops_testutil",
+        ":ops_util",
         "//tensorflow/core:array_ops_op_lib",
         "//tensorflow/core:framework",
         "//tensorflow/core:math_ops_op_lib",
@@ -6928,6 +6969,55 @@ tf_mkl_kernel_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
     ] + mkl_deps(),
+)
+
+tf_mkl_kernel_library(
+    name = "mkl_dequantize_op",
+    srcs = ["mkl_dequantize_op.cc"],
+    hdrs = [
+        "meta_support.h",
+        "reference_gemm.h",
+    ],
+    deps = [
+        ":concat_lib_hdrs",
+        ":conv_ops",
+        ":cwise_op",
+        ":eigen_helpers",
+        ":image_resizer_state",
+        ":ops_util",
+        ":pooling_ops",
+        ":quantization_utils",
+        ":quantized_ops",
+        ":transpose_functor",
+        "//tensorflow/core:array_ops_op_lib",
+        "//tensorflow/core:core_cpu",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:math_ops_op_lib",
+        "//tensorflow/core:nn_ops_op_lib",
+        "//third_party/eigen3",
+        "@gemmlowp",
+    ] + mkl_deps(),
+)
+
+tf_cc_test_mkl(
+    name = "mkl_dequantize_op_test",
+    size = "small",
+    srcs = ["mkl_dequantize_op_test.cc"],
+    deps = [
+        ":mkl_dequantize_op",
+        ":ops_testutil",
+        ":ops_util",
+        "//tensorflow/core:array_ops_op_lib",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:math_ops_op_lib",
+        "//tensorflow/core:mkl_array_ops_op_lib",
+        "//tensorflow/core:nn_ops_op_lib",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
+    ],
 )
 
 tf_mkl_kernel_library(
