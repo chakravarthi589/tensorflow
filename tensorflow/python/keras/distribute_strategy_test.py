@@ -727,14 +727,14 @@ class TestDistributionStrategyWithNumpyArrays(test.TestCase,
       cpu_model = get_model()
       cpu_model.compile(optimizer, loss)
 
-      inputs = np.zeros((10, 3), dtype=np.float32)
+      inputs = np.random.random((10, 3)).astype(np.float32)
 
       # As sample size is 10, we batch by 4 so that the last batch is
       # a partial batch. Also `predict()` using numpy array as inputs without
       # distribution strategy uses entire sample as a single batch. As so,
       # we remove parameters `batch_size` and `steps`.
-      predict_ground_truth = cpu_model.predict(inputs)
       cpu_model.set_weights(model_with_ds_strategy.get_weights())
+      predict_ground_truth = cpu_model.predict(inputs)
       self.assertAllClose(
           model_with_ds_strategy.predict(inputs, batch_size=4, steps=3),
           predict_ground_truth,
@@ -920,7 +920,7 @@ class TestDistributionStrategyWithDatasets(test.TestCase,
       self.assertAllClose(
           predict_with_numpy, predict_with_ds, atol=1e-4, rtol=1e-4)
 
-  @combinations.generate(all_strategy_combinations())
+  @combinations.generate(strategy_minus_tpu_combinations())
   def test_on_dataset_with_unknown_cardinality_without_steps(
       self, distribution):
     with self.cached_session():
@@ -959,21 +959,53 @@ class TestDistributionStrategyWithDatasets(test.TestCase,
       self.assertAllClose(
           predict_with_numpy, predict_with_ds, atol=1e-4, rtol=1e-4)
 
-      if (distributed_training_utils.is_tpu_strategy(distribution) and
-          distribution.extended.steps_per_run != 1):
-        with self.assertRaisesRegexp(ValueError, '`steps_per_epoch` '
-                                     'should be specified'):
-          fit_with_ds = model.fit(dataset, epochs=1)
-      else:
-        fit_with_ds = model.fit(dataset,
-                                epochs=1).history
-        fit_with_ds_multiple_epochs = model.fit(dataset,
-                                                epochs=2).history
-        self.assertAllClose(
-            fit_with_numpy, fit_with_ds, atol=1e-4, rtol=1e-4)
-        self.assertAllClose(
-            fit_with_numpy_multiple_epochs,
-            fit_with_ds_multiple_epochs, atol=1e-4, rtol=1e-4)
+      fit_with_ds = model.fit(dataset,
+                              epochs=1).history
+      fit_with_ds_multiple_epochs = model.fit(dataset,
+                                              epochs=2).history
+      self.assertAllClose(
+          fit_with_numpy, fit_with_ds, atol=1e-4, rtol=1e-4)
+      self.assertAllClose(
+          fit_with_numpy_multiple_epochs,
+          fit_with_ds_multiple_epochs, atol=1e-4, rtol=1e-4)
+
+  @combinations.generate(tpu_strategy_combinations())
+  def test_on_dataset_with_unknown_cardinality(self, distribution):
+    with self.cached_session():
+      with distribution.scope():
+        model = get_model()
+        optimizer = gradient_descent.GradientDescentOptimizer(0.001)
+        loss = 'mse'
+        metrics = ['mae', keras.metrics.CategoricalAccuracy()]
+        model.compile(optimizer, loss, metrics=metrics)
+
+      inputs = np.zeros((1000, 3), dtype=np.float32)
+      targets = np.zeros((1000, 4), dtype=np.float32)
+      # steps/steps_per_epoch are calculated when using numpy arrays as
+      # input data.
+      eval_with_numpy = model.evaluate(inputs, targets, batch_size=10)
+      predict_with_numpy = model.predict(inputs, batch_size=10)
+
+      dataset = convert_numpy_to_dataset_with_unknown_cardinality(
+          inputs, targets)
+      predict_dataset = convert_numpy_to_dataset_with_unknown_cardinality(
+          inputs)
+
+      self.assertEqual(keras.backend.get_value(cardinality.cardinality(
+          dataset)), cardinality.UNKNOWN)
+      self.assertEqual(keras.backend.get_value(cardinality.cardinality(
+          predict_dataset)), cardinality.UNKNOWN)
+
+      eval_with_ds = model.evaluate(dataset, steps=100)
+      predict_with_ds = model.predict(predict_dataset, steps=100)
+      self.assertAllClose(
+          eval_with_numpy, eval_with_ds, atol=1e-4, rtol=1e-4)
+      self.assertAllClose(
+          predict_with_numpy, predict_with_ds, atol=1e-4, rtol=1e-4)
+
+      with self.assertRaisesRegexp(ValueError,
+                                   'Number of steps could not be infered'):
+        model.fit(dataset, epochs=1)
 
   @combinations.generate(all_strategy_combinations())
   def test_fit_eval_and_predict_methods_on_dataset(self, distribution):
@@ -1180,7 +1212,7 @@ class TestDistributionStrategyWithDatasets(test.TestCase,
       cpu_model = get_model()
       cpu_model.compile(optimizer, loss)
 
-      inputs = np.zeros((10, 3), dtype=np.float32)
+      inputs = np.random.random((10, 3)).astype(np.float32)
       dataset = dataset_ops.Dataset.from_tensor_slices((inputs))
 
       # As sample size is 10, we batch by 4 so that the last batch is
