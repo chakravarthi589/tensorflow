@@ -1098,6 +1098,7 @@ tf_cc_test(
         ":buffer_liveness",
         ":hlo",
         ":hlo_dataflow_analysis",
+        ":hlo_parser",
         "//tensorflow/compiler/xla:shape_util",
         "//tensorflow/compiler/xla:types",
         "//tensorflow/compiler/xla:util",
@@ -2024,6 +2025,7 @@ cc_library(
     deps = [
         ":hlo",
         ":while_util",
+        "//tensorflow/compiler/xla:literal_util",
         "//tensorflow/compiler/xla:status",
         "//tensorflow/compiler/xla:statusor",
         "//tensorflow/compiler/xla:types",
