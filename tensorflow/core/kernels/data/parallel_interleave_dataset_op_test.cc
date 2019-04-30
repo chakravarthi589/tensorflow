@@ -494,7 +494,7 @@ TEST_P(ParameterizedParallelInterleaveDatasetOpTest, GetNext) {
   }
 
   TF_EXPECT_OK(ExpectEqual(out_tensors, test_case.expected_outputs,
-                           /*expect_items_equal*/ test_case.sloppy));
+                           /*compare_order*/ !test_case.sloppy));
 }
 
 TEST_F(ParallelInterleaveDatasetOpTest, InvalidArguments) {
@@ -884,7 +884,8 @@ TEST_F(ParallelInterleaveDatasetOpTest, IteratorOutputPrefix) {
   EXPECT_EQ(iterator->prefix(), "Iterator::ParallelInterleaveV2");
 }
 
-TEST_P(ParameterizedParallelInterleaveDatasetOpTest, Roundtrip) {
+// TODO(b/130309946): Re-enable once deflaked.
+TEST_P(ParameterizedParallelInterleaveDatasetOpTest, DISABLED_Roundtrip) {
   int thread_num = 2, cpu_num = 2;
   const TestCase &test_case = GetParam();
   TF_ASSERT_OK(InitThreadPool(thread_num));
@@ -949,7 +950,7 @@ TEST_P(ParameterizedParallelInterleaveDatasetOpTest, Roundtrip) {
   }
 
   TF_EXPECT_OK(ExpectEqual(out_tensors, test_case.expected_outputs,
-                           /*expect_items_equal*/ test_case.sloppy));
+                           /*compare_order*/ !test_case.sloppy));
 }
 
 INSTANTIATE_TEST_SUITE_P(

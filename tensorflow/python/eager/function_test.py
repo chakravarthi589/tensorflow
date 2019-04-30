@@ -41,6 +41,7 @@ from tensorflow.python.framework import function as tf_function
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import random_seed
 from tensorflow.python.framework import sparse_tensor
+from tensorflow.python.framework import sparse_tensor_spec
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_spec
 from tensorflow.python.framework import test_ops
@@ -66,6 +67,7 @@ from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import variable_scope
 from tensorflow.python.ops import variables
 from tensorflow.python.ops.ragged import ragged_tensor
+from tensorflow.python.ops.ragged import ragged_tensor_spec
 from tensorflow.python.platform import test
 from tensorflow.python.training import training_ops
 from tensorflow.python.util import compat
@@ -964,6 +966,16 @@ class FunctionTest(test.TestCase, parameterized.TestCase):
        {'flat_values': [1, 2, 3], 'nested_row_lengths': [[1, 2], [2, 0, 1]]}),
       (sparse_tensor.SparseTensor,
        {'values': [1, 2, 3], 'indices': [[0], [8], [10]], 'dense_shape': [20]}),
+      (ragged_tensor.RaggedTensor.from_row_lengths,
+       {'values': [1, 2, 3], 'row_lengths': [2, 0, 1]},
+       [ragged_tensor_spec.ragged_tensor_spec([None, None], dtypes.int32)]),
+      (ragged_tensor.RaggedTensor.from_nested_row_lengths,
+       {'flat_values': [1, 2, 3], 'nested_row_lengths': [[1, 2], [2, 0, 1]]},
+       [ragged_tensor_spec.ragged_tensor_spec([None, None, None],
+                                              dtypes.int32)]),
+      (sparse_tensor.SparseTensor,
+       {'values': [1, 2, 3], 'indices': [[0], [8], [10]], 'dense_shape': [20]},
+       [sparse_tensor_spec.sparse_tensor_spec([None], dtypes.int32)]),
   ])  # pyformat: disable
   def testCompositeAsArgumentTensorWithDefun(self,
                                              factory_fn,
@@ -2937,6 +2949,33 @@ class MultiDeviceTest(test.TestCase, parameterized.TestCase):
         layer_variables = layer.trainable_variables
         gradients = tape.gradient(loss, layer_variables)
         optimizer.apply_gradients(zip(gradients, layer_variables))
+
+    train()
+
+  def testEarlyStoppingTrainingLoopInFunction(self):
+    self.skipTest('b/131596092')
+    layer = core.Dense(2)
+    dataset = (
+        dataset_ops.DatasetV2.from_tensors(
+            (array_ops.ones([784]), array_ops.ones([], dtypes.int32)))
+        .map(lambda x, y: (x, y))
+        .repeat(10)
+        .batch(32))
+    optimizer = adam.Adam()
+
+    @def_function.function
+    def train():
+      for x, y in dataset:
+        with backprop.GradientTape() as tape:
+          out = layer(x)
+          loss = math_ops.reduce_mean(
+              nn_ops.sparse_softmax_cross_entropy_with_logits(
+                  logits=out, labels=y))
+        layer_variables = layer.trainable_variables
+        gradients = tape.gradient(loss, layer_variables)
+        optimizer.apply_gradients(zip(gradients, layer_variables))
+        if optimizer.iterations > 3:
+          break
 
     train()
 

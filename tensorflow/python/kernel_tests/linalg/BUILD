@@ -280,7 +280,7 @@ cuda_py_test(
         "//tensorflow/python:math_ops",
         "//tensorflow/python:platform_test",
     ],
-    shard_count = 8,
+    shard_count = 10,
     tags = [
         "noasan",
         "optonly",
@@ -310,7 +310,7 @@ cuda_py_test(
 
 cuda_py_test(
     name = "linear_operator_low_rank_update_test",
-    size = "large",
+    size = "medium",
     srcs = ["linear_operator_low_rank_update_test.py"],
     additional_deps = [
         "//tensorflow/python/ops/linalg",
@@ -321,7 +321,7 @@ cuda_py_test(
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:platform_test",
     ],
-    shard_count = 5,
+    shard_count = 10,
     tags = [
         "noasan",  # times out
         "optonly",

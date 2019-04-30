@@ -141,7 +141,7 @@ class DatasetV2(tracking_base.Trackable):
       raise NotImplementedError(
           "Can only export Datasets which were created executing eagerly. "
           "Please file a feature request if this is important to you.")
-    with context.eager_mode():
+    with context.eager_mode(), ops.device("CPU"):
       graph_def = graph_pb2.GraphDef().FromString(
           self._as_serialized_graph().numpy())  # pylint: disable=protected-access
     output_node_name = None
@@ -2028,12 +2028,6 @@ class Options(options_lib.OptionsBase):
       "Whether the outputs need to be produced in deterministic order. If None,"
       " defaults to True.")
 
-  experimental_numa_aware = options_lib.create_option(
-      name="experimental_numa_aware",
-      ty=bool,
-      docstring=
-      "Whether to use NUMA-aware operations. If None, defaults to False.")
-
   experimental_optimization = options_lib.create_option(
       name="experimental_optimization",
       ty=optimization_options.OptimizationOptions,
@@ -2064,8 +2058,6 @@ class Options(options_lib.OptionsBase):
     result = []
     result.extend(self.experimental_optimization._static_optimizations())  # pylint: disable=protected-access
 
-    if self.experimental_numa_aware:
-      result.append("make_numa_aware")
     if self.experimental_deterministic is False:
       result.append("make_sloppy")
     exp_stats_options = self.experimental_stats
@@ -2897,7 +2889,7 @@ class _VariantTracker(tracking.TrackableResource):
         variant-dtype Tensor. This function will be included in SavedModels and
         run to re-create the Dataset's variant Tensor on restore.
     """
-    super(_VariantTracker, self).__init__()
+    super(_VariantTracker, self).__init__(device="CPU")
     self._resource_handle = variant_tensor
     self._create_resource = resource_creator
 

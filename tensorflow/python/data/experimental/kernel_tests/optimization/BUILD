@@ -58,6 +58,7 @@ py_test(
         "no_oss",
         "no_pip",
         "no_windows",
+        "notap",  # TODO(b/131229793)
     ],
     deps = [
         "//tensorflow/python:client_testlib",
@@ -117,25 +118,6 @@ py_test(
         "//tensorflow/python/data/experimental/ops:optimization",
         "//tensorflow/python/data/experimental/ops:stats_aggregator",
         "//tensorflow/python/data/experimental/ops:stats_ops",
-        "//tensorflow/python/data/ops:dataset_ops",
-    ],
-)
-
-py_test(
-    name = "make_numa_aware_test",
-    srcs = ["make_numa_aware_test.py"],
-    srcs_version = "PY2AND3",
-    tags = [
-        "no_oss",
-        "no_pip",
-        "no_windows",
-    ],
-    deps = [
-        "//tensorflow/python:client_testlib",
-        "//tensorflow/python:errors",
-        "//tensorflow/python/data/experimental/ops:batching",
-        "//tensorflow/python/data/experimental/ops:optimization",
-        "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/data/ops:dataset_ops",
     ],
 )
