@@ -163,7 +163,7 @@ class BatchNormalizationBase(Layer):
       self.axis = axis
     else:
       raise TypeError('axis must be int or list, type given: %s'
-                      % type(self.axis))
+                      % type(axis))
     self.momentum = momentum
     self.epsilon = epsilon
     self.center = center
@@ -650,10 +650,11 @@ class BatchNormalizationBase(Layer):
 
       mean = tf_utils.smart_cond(training,
                                  lambda: mean,
-                                 moving_mean.read_value)
-      variance = tf_utils.smart_cond(training,
-                                     lambda: variance,
-                                     moving_variance.read_value)
+                                 lambda: ops.convert_to_tensor(moving_mean))
+      variance = tf_utils.smart_cond(
+          training,
+          lambda: variance,
+          lambda: ops.convert_to_tensor(moving_variance))
 
       if self.virtual_batch_size is not None:
         # This isn't strictly correct since in ghost batch norm, you are

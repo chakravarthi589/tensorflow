@@ -1678,6 +1678,13 @@ tf_cuda_library(
 )
 
 # -----------------------------------------------------------------------------
+# MKL targets
+cc_library(
+    name = "mkl_graph_util",
+    hdrs = ["graph/mkl_graph_util.h"],
+)
+
+# -----------------------------------------------------------------------------
 # Public Android targets
 
 # Android-specific BUILD targets
@@ -2196,6 +2203,13 @@ tf_pyclif_proto_library(
     name = "protobuf/saved_model_pyclif",
     proto_lib = ":protos_all_cc",
     proto_srcfile = "protobuf/saved_model.proto",
+    visibility = ["//visibility:public"],
+)
+
+tf_pyclif_proto_library(
+    name = "framework/variable_pyclif",
+    proto_lib = ":protos_all_cc",
+    proto_srcfile = "framework/variable.proto",
     visibility = ["//visibility:public"],
 )
 
