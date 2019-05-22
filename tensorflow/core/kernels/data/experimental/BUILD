@@ -1,5 +1,6 @@
 # Description:
 #   Contains experimental kernels for datasets and iterators.
+
 package(default_visibility = ["//tensorflow:internal"])
 
 licenses(["notice"])  # Apache 2.0
@@ -316,6 +317,7 @@ tf_kernel_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
+        "@com_google_absl//absl/time",
     ],
 )
 

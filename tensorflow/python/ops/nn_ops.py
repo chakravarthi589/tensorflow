@@ -3981,6 +3981,25 @@ def max_pool_with_argmax_v1(  # pylint: disable=missing-docstring,invalid-name
 max_pool_with_argmax_v1.__doc__ = gen_nn_ops.max_pool_with_argmax.__doc__
 
 
+@ops.RegisterStatistics("Conv3D", "flops")
+def _calc_conv3d_flops(graph, node):
+  """Calculates the compute resources needed for Conv3D."""
+  input_shape = graph_util.tensor_shape_from_node_def_name(graph, node.input[0])
+  input_shape.assert_is_fully_defined()
+  filter_shape = graph_util.tensor_shape_from_node_def_name(
+      graph, node.input[1])
+  filter_shape.assert_is_fully_defined()
+  output_shape = graph_util.tensor_shape_from_node_def_name(graph, node.name)
+  output_shape.assert_is_fully_defined()
+  filter_time = int(filter_shape[0])
+  filter_height = int(filter_shape[1])
+  filter_width = int(filter_shape[2])
+  filter_in_depth = int(filter_shape[3])
+  output_count = np.prod(output_shape.as_list(), dtype=np.int64)
+  return ops.OpStats("flops", (output_count * filter_in_depth * filter_time *
+                               filter_height * filter_width * 2))
+
+
 @ops.RegisterStatistics("Conv2D", "flops")
 def _calc_conv_flops(graph, node):
   """Calculates the compute resources needed for Conv2D."""
@@ -4736,11 +4755,11 @@ def in_top_k(predictions, targets, k, name=None):
   r"""Says whether the targets are in the top `K` predictions.
 
   This outputs a `batch_size` bool array, an entry `out[i]` is `true` if the
-  prediction for the target class is among the top `k` predictions among
-  all predictions for example `i`. Note that the behavior of `InTopK` differs
-  from the `TopK` op in its handling of ties; if multiple classes have the
-  same prediction value and straddle the top-`k` boundary, all of those
-  classes are considered to be in the top `k`.
+  prediction for the target class is finite (not inf, -inf, or nan) and among
+  the top `k` predictions among all predictions for example `i`. Note that the
+  behavior of `InTopK` differs from the `TopK` op in its handling of ties; if
+  multiple classes have the same prediction value and straddle the top-`k`
+  boundary, all of those classes are considered to be in the top `k`.
 
   More formally, let
 

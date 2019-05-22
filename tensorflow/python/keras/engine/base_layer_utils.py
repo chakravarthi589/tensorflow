@@ -17,7 +17,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections as collections_lib
 import threading
 import enum
 
@@ -25,6 +24,7 @@ from tensorflow.python.distribute import distribution_strategy_context
 from tensorflow.python.eager import context
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.keras import backend
 from tensorflow.python.ops import array_ops
@@ -139,7 +139,8 @@ def make_variable(name,
 
   # TODO(apassos,rohanj) figure out how to remove collections from here so we
   # can remove the V1.
-  v = tf_variables.VariableV1(
+  variable_shape = tensor_shape.TensorShape(shape)
+  return tf_variables.VariableV1(
       initial_value=init_val,
       name=name,
       trainable=trainable,
@@ -150,64 +151,8 @@ def make_variable(name,
       use_resource=use_resource,
       collections=collections,
       synchronization=synchronization,
-      aggregation=aggregation)
-  return v
-
-
-def get_default_graph_uid_map():
-  # TODO(fchollet): refactor this into backend.
-  graph = ops.get_default_graph()
-  name_uid_map = backend.PER_GRAPH_LAYER_NAME_UIDS.get(graph, None)
-  if name_uid_map is None:
-    name_uid_map = collections_lib.defaultdict(int)
-    backend.PER_GRAPH_LAYER_NAME_UIDS[graph] = name_uid_map
-  return name_uid_map
-
-
-def unique_layer_name(name, name_uid_map=None, avoid_names=None, namespace='',
-                      zero_based=False):
-  """Makes a layer name (or arbitrary string) unique within a TensorFlow graph.
-
-  Arguments:
-    name: String name to make unique.
-    name_uid_map: An optional defaultdict(int) to use when creating unique
-      names. If None (default), uses a per-Graph dictionary.
-    avoid_names: An optional set or dict with names which should not be used. If
-      None (default) does not avoid any names.
-    namespace: Gets a name which is unique within the (graph, namespace). Layers
-      which are not Networks use a blank namespace and so get graph-global
-      names.
-    zero_based: If True, name sequences start with no suffix (e.g. "dense",
-      "dense_1"). If False, naming is one-based ("dense_1", "dense_2").
-
-  Returns:
-    Unique string name.
-
-  Example:
-
-  ```python
-  _unique_layer_name('dense')  # dense_1
-  _unique_layer_name('dense')  # dense_2
-  ```
-  """
-  if name_uid_map is None:
-    name_uid_map = get_default_graph_uid_map()
-  if avoid_names is None:
-    avoid_names = set()
-  proposed_name = None
-  while proposed_name is None or proposed_name in avoid_names:
-    name_key = (namespace, name)
-    if zero_based:
-      number = name_uid_map[name_key]
-      if number:
-        proposed_name = name + '_' + str(number)
-      else:
-        proposed_name = name
-      name_uid_map[name_key] += 1
-    else:
-      name_uid_map[name_key] += 1
-      proposed_name = name + '_' + str(name_uid_map[name_key])
-  return proposed_name
+      aggregation=aggregation,
+      shape=variable_shape if variable_shape.rank else None)
 
 
 def collect_previous_mask(input_tensors):
@@ -353,15 +298,21 @@ def is_in_keras_graph():
   """Returns if currently executing inside of a Keras graph."""
   # Returns True even if in a subgraph of the Keras graph, such as those
   # created by control flow ops.
+  if context.executing_eagerly():
+    return False
   return (getattr(backend.get_graph(), 'name', None) == 'keras_graph' or
           getattr(_call_context, 'in_keras_graph', False))
 
 
 def is_in_eager_or_tf_function():
   """Returns if in eager mode or inside of a tf.function."""
-  return (context.executing_eagerly() or
-          (ops.executing_eagerly_outside_functions() and
-           not is_in_keras_graph()))
+  return context.executing_eagerly() or is_in_tf_function()
+
+
+def is_in_tf_function():
+  """Returns if inside of a tf.function."""
+  return (ops.executing_eagerly_outside_functions() and
+          not context.executing_eagerly() and not is_in_keras_graph())
 
 
 def uses_keras_history(tensors):
@@ -422,15 +373,25 @@ def mark_checked(tensors):
 
 
 @tf_contextlib.contextmanager
-def call_context(layer):
-  """Scope that marks when we are currently inside a Layer/Model's `call`."""
+def call_context(layer, build_graph):
+  """Scope that marks when we are currently inside a Layer/Model's `call`.
+
+  Args:
+    layer: The current layer we are entering.
+    build_graph: True if the layer is building a graph to handle symbolic
+      inputs, False if the layer is processing eager inputs eagerly.
+
+  Yields:
+    A scope in the new call context.
+  """
   was_in_call = is_in_call_context()
   was_frozen = is_in_frozen_context()
   was_in_keras_graph = getattr(_call_context, 'in_keras_graph', False)
   _call_context.in_call = True
   _call_context.in_keras_graph = (
       was_in_keras_graph or
-      getattr(backend.get_graph(), 'name', None) == 'keras_graph')
+      (build_graph and
+       getattr(backend.get_graph(), 'name', None) == 'keras_graph'))
   if not layer.trainable:
     _call_context.frozen = True
   try:
@@ -446,7 +407,7 @@ def training_arg_passed_to_call(argspec, args, kwargs):
   # `argspec.args` starts with ['self', 'inputs']
   full_args = dict(zip(argspec.args[2:], args))
   full_args.update(kwargs)
-  return 'training' in full_args
+  return 'training' in full_args and full_args['training'] is not None
 
 
 def _get_var_read_dtype(input_list, should_cast):
@@ -490,7 +451,8 @@ def check_graph_consistency(tensor=None, method='add_loss', force_raise=False):
   We need to raise clear error messages in such cases.
 
   Arguments:
-    tensor: Tensor to check.
+    tensor: Tensor to check, or `False` if it is known that an error
+      should be raised.
     method: Caller method, one of {'add_metric', 'add_loss', 'add_update'}.
     force_raise: If an error should be raised regardless of `tensor`.
 
@@ -503,6 +465,43 @@ def check_graph_consistency(tensor=None, method='add_loss', force_raise=False):
                                  (control_flow_util_v2.CondBranchFuncGraph,
                                   control_flow_util_v2.WhileCondFuncGraph,
                                   control_flow_util_v2.WhileBodyFuncGraph)))):
+    if method == 'activity_regularizer':
+      bad_example = """
+      class TestModel(tf.keras.Model):
+
+        def __init__(self):
+          super(TestModel, self).__init__(name='test_model')
+          self.dense = tf.keras.layers.Dense(2, activity_regularizer='l2')
+
+        def call(self, x, training=None):
+          if training:
+            return self.dense(x)
+          else:
+            return self.dense(x)
+      """
+      correct_example = """
+      class TestModel(tf.keras.Model):
+
+        def __init__(self):
+          super(TestModel, self).__init__(name='test_model')
+          self.dense = tf.keras.layers.Dense(2, activity_regularizer='l2')
+
+        def call(self, x, training=None):
+          return self.dense(x)
+      """
+      raise RuntimeError(
+          'You are using a layer with `activity_regularizer` in a control flow '
+          'branch, e.g.:\n{bad_example}\nThis is currently not supported. '
+          'Please move your call to the layer with `activity_regularizer` out '
+          'of the control flow branch, e.g.:\n{correct_example}\n'
+          'You can also resolve this by marking your outer model/layer dynamic'
+          ' (eager-only) by passing `dynamic=True` to the layer constructor. '
+          'Any kind of control flow is supported with dynamic layers. '
+          'Note that using `dynamic=True` requires you to implement static '
+          'shape inference in the `compute_output_shape(input_shape)` '
+          'method.'.format(
+              bad_example=bad_example, correct_example=correct_example))
+
     if method == 'add_metric':
       bad_example = """
       def call(self, inputs, training=None):
@@ -557,8 +556,7 @@ def check_graph_consistency(tensor=None, method='add_loss', force_raise=False):
         'You are using the method `{method}` in a control flow branch '
         'in your layer, e.g.:\n{bad_example}\n'
         'This is not currently supported. '
-        'You should either use static control flow (`tf.cond`) '
-        'or move your call to {method} out of the control flow branch, '
+        'Please move your call to {method} out of the control flow branch, '
         'e.g.:\n{correct_example}\n'
         'You can also resolve this by marking your layer '
         'as dynamic (eager-only) by passing '
@@ -586,6 +584,12 @@ def mark_as_return(outputs, acd):
       return_tensor._keras_mask = acd.mark_as_return(tensor._keras_mask)
     else:
       return_tensor._keras_mask = None
+
+    # Handle TensorFlow Probability attached metadata.
+    # TODO(b/132076537): Remove this once TFP uses `CompositeTensor`.
+    if getattr(tensor, '_tfp_distribution', None) is not None:
+      return_tensor._tfp_distribution = tensor._tfp_distribution
+
     return return_tensor
     # pylint: enable=protected-access
 

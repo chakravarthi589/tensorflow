@@ -863,14 +863,14 @@ class MklLayoutRewritePass : public GraphOptimizationPass {
 
     // If Op has been specifically assigned to a non-CPU device, then No.
     if (!n->assigned_device_name().empty() &&
-        !str_util::StrContains(n->assigned_device_name(), kCPUDeviceSubStr)) {
+        !absl::StrContains(n->assigned_device_name(), kCPUDeviceSubStr)) {
       result = false;
       reason = "Op has been assigned a runtime device that is not CPU.";
     }
 
     // If user has specifically assigned this op to a non-CPU device, then No.
     if (!n->def().device().empty() &&
-        !str_util::StrContains(n->def().device(), kCPUDeviceSubStr)) {
+        !absl::StrContains(n->def().device(), kCPUDeviceSubStr)) {
       result = false;
       reason = "User has assigned a device that is not CPU.";
     }
@@ -3404,6 +3404,16 @@ MklLayoutRewritePass::CheckForNodeRewrite(const Node* n) const {
   DataType T;
   if (!GetNodeAttr(n->def(), "T", &T).ok()) {
     return nullptr;
+  }
+
+  // We make an exception for Conv2D, as the corresponding MKL ops
+  // currently do not support the case of padding == EXPLICIT yet.
+  if (n->type_string() == csinfo_.conv2d ||
+      n->type_string() == csinfo_.conv2d_grad_input ||
+      n->type_string() == csinfo_.conv2d_grad_filter) {
+    string padding;
+    TF_CHECK_OK(GetNodeAttr(n->def(), "padding", &padding));
+    if (padding == "EXPLICIT") return nullptr;
   }
 
   // We make an exception for __MklDummyConv2DWithBias,

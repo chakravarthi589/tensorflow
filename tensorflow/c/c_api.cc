@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/strings/match.h"
 // Required for IS_MOBILE_PLATFORM
 #include "tensorflow/core/platform/platform.h"  // NOLINT
 
@@ -30,8 +31,8 @@ limitations under the License.
 #include "tensorflow/cc/ops/while_loop.h"
 #include "tensorflow/cc/saved_model/loader.h"
 #include "tensorflow/core/distributed_runtime/server_lib.h"
+#include "tensorflow/core/framework/logging.h"
 #include "tensorflow/core/framework/op_gen_lib.h"
-#include "tensorflow/core/kernels/logging_ops.h"
 #endif  // !defined(IS_MOBILE_PLATFORM) && !defined(IS_SLIM_BUILD)
 #include "tensorflow/c/c_api_internal.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
@@ -112,28 +113,6 @@ const char* TF_Version() { return TF_VERSION_STRING; }
 size_t TF_DataTypeSize(TF_DataType dt) {
   return static_cast<size_t>(
       tensorflow::DataTypeSize(static_cast<DataType>(dt)));
-}
-
-// --------------------------------------------------------------------------
-
-TF_Status* TF_NewStatus() { return new TF_Status; }
-
-void TF_DeleteStatus(TF_Status* s) { delete s; }
-
-void TF_SetStatus(TF_Status* s, TF_Code code, const char* msg) {
-  if (code == TF_OK) {
-    s->status = Status::OK();
-    return;
-  }
-  s->status = Status(static_cast<Code>(code), tensorflow::StringPiece(msg));
-}
-
-TF_Code TF_GetCode(const TF_Status* s) {
-  return static_cast<TF_Code>(s->status.code());
-}
-
-const char* TF_Message(const TF_Status* s) {
-  return s->status.error_message().c_str();
 }
 
 // --------------------------------------------------------------------------
@@ -2517,8 +2496,7 @@ void TF_AddGradientsWithPrefix(TF_Graph* g, const char* prefix, TF_Output* y,
       // used in this graph
       for (const auto& pair : g->name_map) {
         const string& name = pair.first;
-        if (name.compare(prefix) == 0 ||
-            tensorflow::str_util::StartsWith(name, prefix_cmp)) {
+        if ((name == prefix) || absl::StartsWith(name, prefix_cmp)) {
           status->status = InvalidArgument(
               "prefix [", prefix,
               "] conflicts with existing node in the graph named [", name, "]");
@@ -2548,8 +2526,7 @@ void TF_AddGradientsWithPrefix(TF_Graph* g, const char* prefix, TF_Output* y,
       // Adding the gradients to the graph can alter the prefix to prevent
       // name collisions only if this prefix has not been provided explicitly
       // by the user. If it was provided, assert that it remained intact.
-      if (prefix != nullptr &&
-          !tensorflow::str_util::StartsWith(n->name(), prefix_cmp)) {
+      if (prefix != nullptr && !absl::StartsWith(n->name(), prefix_cmp)) {
         status->status = tensorflow::errors::Internal(
             "BUG: The gradients prefix have been unexpectedly altered when "
             "adding the nodes to the graph. This is a bug. Please file an "
