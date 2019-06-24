@@ -140,7 +140,8 @@ def _create_cluster(num_workers,
 def create_in_process_cluster(num_workers,
                               num_ps,
                               has_chief=False,
-                              has_eval=False):
+                              has_eval=False,
+                              rpc_layer='grpc'):
   """Create an in-process cluster that consists of only standard server."""
   # Leave some memory for cuda runtime.
   gpu_mem_frac = 0.7 / (num_workers + int(has_chief) + int(has_eval))
@@ -180,10 +181,11 @@ def create_in_process_cluster(num_workers,
       worker_config=worker_config,
       ps_config=ps_config,
       eval_config=eval_config,
-      protocol='grpc')
+      protocol=rpc_layer)
 
 
-def create_cluster_spec(has_chief=False,
+def create_cluster_spec(test_obj,
+                        has_chief=False,
                         num_workers=1,
                         num_ps=0,
                         has_eval=False):
@@ -192,19 +194,34 @@ def create_cluster_spec(has_chief=False,
     raise _portpicker_import_error  # pylint: disable=raising-bad-type
 
   cluster_spec = {}
-  if has_chief:
-    cluster_spec['chief'] = ['localhost:%s' % pick_unused_port()]
-  if num_workers:
-    cluster_spec['worker'] = [
-        'localhost:%s' % pick_unused_port() for _ in range(num_workers)
-    ]
-  if num_ps:
-    cluster_spec['ps'] = [
-        'localhost:%s' % pick_unused_port() for _ in range(num_ps)
-    ]
-  if has_eval:
-    cluster_spec['evaluator'] = ['localhost:%s' % pick_unused_port()]
+  try:
+    if has_chief:
+      cluster_spec['chief'] = ['localhost:%s' % pick_unused_port()]
+    if num_workers:
+      cluster_spec['worker'] = [
+          'localhost:%s' % pick_unused_port() for _ in range(num_workers)
+      ]
+    if num_ps:
+      cluster_spec['ps'] = [
+          'localhost:%s' % pick_unused_port() for _ in range(num_ps)
+      ]
+    if has_eval:
+      cluster_spec['evaluator'] = ['localhost:%s' % pick_unused_port()]
+  except portpicker.NoFreePortFoundError:
+    test_obj.skipTest('Flakes in portpicker library do not represent '
+                      'TensorFlow errors.')
   return cluster_spec
+
+
+@contextlib.contextmanager
+def skip_if_grpc_server_cant_be_started(test_obj):
+  try:
+    yield
+  except errors.UnknownError as e:
+    if 'Could not start gRPC server' in e.message:
+      test_obj.skipTest('Cannot start std servers.')
+    else:
+      raise
 
 
 class MultiWorkerTestBase(test.TestCase):
@@ -381,7 +398,9 @@ class IndependentWorkerTestBase(test.TestCase):
   def _make_mock_run_std_server(self):
 
     def _mock_run_std_server(*args, **kwargs):
-      ret = original_run_std_server(*args, **kwargs)
+      """Returns the std server once all threads have started it."""
+      with skip_if_grpc_server_cant_be_started(self):
+        ret = original_run_std_server(*args, **kwargs)
       # Wait for all std servers to be brought up in order to reduce the chance
       # of remote sessions taking local ports that have been assigned to std
       # servers. Only call this barrier the first time this function is run for
@@ -475,13 +494,8 @@ class IndependentWorkerTestBase(test.TestCase):
     return threads
 
   def join_independent_workers(self, worker_threads):
-    try:
+    with skip_if_grpc_server_cant_be_started(self):
       self._coord.join(worker_threads)
-    except errors.UnknownError as e:
-      if 'Could not start gRPC server' in e.message:
-        self.skipTest('Cannot start std servers.')
-      else:
-        raise
 
 
 class MultiWorkerMultiProcessTest(test.TestCase):

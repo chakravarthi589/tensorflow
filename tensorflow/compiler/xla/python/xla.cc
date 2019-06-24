@@ -280,7 +280,8 @@ PYBIND11_MODULE(xla_extension, m) {
   py::class_<AllocatorConfig> alloc_config(m, "AllocatorConfig");
   alloc_config.def(py::init<>())
       .def_readwrite("kind", &AllocatorConfig::kind)
-      .def_readwrite("memory_fraction", &AllocatorConfig::memory_fraction);
+      .def_readwrite("memory_fraction", &AllocatorConfig::memory_fraction)
+      .def_readwrite("preallocate", &AllocatorConfig::preallocate);
   py::enum_<AllocatorConfig::Kind>(alloc_config, "Kind")
       .value("DEFAULT", AllocatorConfig::Kind::kDefault)
       .value("PLATFORM", AllocatorConfig::Kind::kPlatform)
@@ -298,6 +299,7 @@ PYBIND11_MODULE(xla_extension, m) {
       .def_static("from_python", &PyLocalBuffer::FromPython)
       .def_static("from_python_values", &PyLocalBuffer::FromPythonValues)
       .def_static("make_tuple", &PyLocalBuffer::MakeTuple)
+      .def("copy_to_device", &PyLocalBuffer::CopyToDevice)
       .def("delete", &PyLocalBuffer::Delete)
       .def("destructure", &PyLocalBuffer::DestructureTuple)
       .def("block_host_until_ready", &PyLocalBuffer::BlockHostUntilReady)
