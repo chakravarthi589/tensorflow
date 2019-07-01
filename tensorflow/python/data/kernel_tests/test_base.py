@@ -30,11 +30,10 @@ from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import tensor_array_ops
 from tensorflow.python.ops.ragged import ragged_tensor
-from tensorflow.python.ops.ragged import ragged_test_util
 from tensorflow.python.platform import test
 
 
-class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
+class DatasetTestBase(test.TestCase):
   """Base class for dataset tests."""
 
   @classmethod
@@ -54,7 +53,7 @@ class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
     self.assertAllEqual(a.values, b.values)
     self.assertAllEqual(a.dense_shape, b.dense_shape)
 
-  def getNext(self, dataset, requires_initialization=False):
+  def getNext(self, dataset, requires_initialization=False, shared_name=None):
     """Returns a callable that returns the next element of the dataset.
 
     Example use:
@@ -70,6 +69,9 @@ class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
       requires_initialization: Indicates that when the test is executed in graph
         mode, it should use an initializable iterator to iterate through the
         dataset (e.g. when it contains stateful nodes). Defaults to False.
+      shared_name: (Optional.) If non-empty, the returned iterator will be
+        shared under the given name across multiple sessions that share the same
+        devices (e.g. when using a remote server).
     Returns:
       A callable that returns the next element of `dataset`. Any `TensorArray`
       objects `dataset` outputs are stacked.
@@ -87,7 +89,7 @@ class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
       return ta_wrapper(iterator._next_internal)  # pylint: disable=protected-access
     else:
       if requires_initialization:
-        iterator = dataset_ops.make_initializable_iterator(dataset)
+        iterator = dataset_ops.make_initializable_iterator(dataset, shared_name)
         self.evaluate(iterator.initializer)
       else:
         iterator = dataset_ops.make_one_shot_iterator(dataset)
@@ -108,7 +110,7 @@ class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
         if sparse_tensor.is_sparse(result_value):
           self.assertSparseValuesEqual(result_value, expected_value)
         elif ragged_tensor.is_ragged(result_value):
-          self.assertRaggedEqual(result_value, expected_value)
+          self.assertAllEqual(result_value, expected_value)
         else:
           self.assertAllEqual(
               result_value,
@@ -209,7 +211,7 @@ class DatasetTestBase(ragged_test_util.RaggedTensorTestCase, test.TestCase):
         if sparse_tensor.is_sparse(op1[i]):
           self.assertSparseValuesEqual(op1[i], op2[i])
         elif ragged_tensor.is_ragged(op1[i]):
-          self.assertRaggedEqual(op1[i], op2[i])
+          self.assertAllEqual(op1[i], op2[i])
         elif flattened_types[i] == dtypes.string:
           self.assertAllEqual(op1[i], op2[i])
         else:
