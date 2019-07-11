@@ -270,6 +270,7 @@ tf_py_test(
     tags = [
         "no_windows",
         "nomac",
+        "notap",  # TODO(b/137133525): enable after this is fixed.
     ],
 )
 
@@ -1883,6 +1884,10 @@ tf_gen_op_wrapper_private_py(
         "//tensorflow/contrib/quantization:__pkg__",
         "//tensorflow/python/kernel_tests:__pkg__",
     ],
+    deps = [
+        "//tensorflow/c/kernels:bitcast_op_lib",
+        "//tensorflow/core:array_ops_op_lib",
+    ],
 )
 
 tf_gen_op_wrapper_private_py(
@@ -2533,6 +2538,7 @@ py_library(
         ":graph_to_function_def",
         ":pywrap_tensorflow",
         ":util",
+        "//tensorflow/python/compat",
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/eager:function",
     ],
@@ -3549,6 +3555,7 @@ py_library(
         ":math_ops",
         ":platform",
         "//tensorflow/compiler/tf2xla/ops:gen_xla_ops",
+        "@functools32_archive//:functools32",
         "@opt_einsum_archive//:opt_einsum",
     ],
 )
@@ -4540,9 +4547,9 @@ tf_py_test(
 )
 
 tf_py_test(
-    name = "deprecation_wrapper_test",
+    name = "module_wrapper_test",
     size = "small",
-    srcs = ["util/deprecation_wrapper_test.py"],
+    srcs = ["util/module_wrapper_test.py"],
     additional_deps = [
         ":client_testlib",
         ":util",
@@ -5292,6 +5299,21 @@ tf_py_test(
         ":lib",
         ":util",
     ],
+)
+
+tf_py_test(
+    name = "tf_record_multiprocessing_test",
+    size = "small",
+    srcs = ["lib/io/tf_record_multiprocessing_test.py"],
+    additional_deps = [
+        ":client_testlib",
+        ":errors",
+        ":lib",
+        ":util",
+    ],
+    # The multiprocessing module behaves differently on windows, so we
+    # disable this test on windows.
+    tags = ["no_windows"],
 )
 
 cuda_py_test(
