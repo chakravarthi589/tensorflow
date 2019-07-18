@@ -13,6 +13,7 @@ package_group(
         "//learning/brain/experimental/mlir/...",
         "//learning/brain/google/xla/...",
         "//tensorflow/compiler/mlir/...",
+        "//tensorflow/python/...",
     ],
 )
 
@@ -103,6 +104,7 @@ cc_library(
         "transforms/generated_optimize.inc",
         "transforms/optimize.cc",
         "transforms/raise_control_flow.cc",
+        "translate/control_to_executor_dialect.cc",
     ],
     hdrs = [
         "ir/control_flow_ops.h",
@@ -472,6 +474,7 @@ cc_library(
         "@llvm//:support",
         "@local_config_mlir//:IR",
         "@local_config_mlir//:Parser",
+        "@local_config_mlir//:Pass",
     ],
 )
 
@@ -506,24 +509,6 @@ cc_library(
         "@local_config_mlir//:Translation",
     ],
     alwayslink = 1,
-)
-
-tf_cc_binary(
-    name = "tf-mlir-translate",
-    deps = [
-        ":convert_graphdef",
-        ":mlir_roundtrip_flags",
-        ":translate_cl_options",
-        ":translate_lib",
-        ":translate_registration",
-        ":translate_tf_dialect_op",
-        "//tensorflow/core:protos_all_proto_cc",
-        "//tensorflow/stream_executor/lib",
-        "@llvm//:support",
-        "@local_config_mlir//:IR",
-        "@local_config_mlir//:Translation",
-        "@local_config_mlir//:tools/mlir-translate/mlir-translate",
-    ],
 )
 
 tf_cc_test(

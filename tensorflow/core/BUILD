@@ -3458,7 +3458,7 @@ tf_cuda_library(
         ":protos_all_cc",
         "//tensorflow/core/debug:debug_graph_utils",
         "//tensorflow/core/kernels:function_ops",
-        "//tensorflow/core/profiler/lib:profiler_graph_lib",
+        "//tensorflow/core/profiler/lib:profiler_lib",
         "//tensorflow/core/profiler/lib:profiler_session",
         "//tensorflow/core/profiler/lib:traceme",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -3631,11 +3631,15 @@ tf_cuda_library(
     srcs = [
         "common_runtime/gpu/gpu_id.h",
     ],
-    hdrs = ["common_runtime/gpu/gpu_mem_allocator.h"],
+    hdrs = [
+        "common_runtime/gpu/gpu_host_allocator.h",
+        "common_runtime/gpu/gpu_mem_allocator.h",
+    ],
     features = ["parse_headers"],
     visibility = ["//visibility:public"],
     deps = [
         ":allocator",
+        ":lib",
         ":lib_internal",
         ":stream_executor",
     ],

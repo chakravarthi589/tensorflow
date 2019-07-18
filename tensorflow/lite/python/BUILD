@@ -29,6 +29,8 @@ py_test(
     srcs_version = "PY2AND3",
     tags = [
         "no_windows",
+        "noasan",  # TODO(b/137568139): enable after this is fixed.
+        "nomsan",  # TODO(b/137568139): enable after this is fixed.
     ],
     deps = [
         ":interpreter",
@@ -174,7 +176,7 @@ py_library(
         "wrap_toco.py",
     ],
     deps = [
-        "//tensorflow/lite/toco/python:tensorflow_wrap_toco",
+        "//tensorflow/python:pywrap_tensorflow",
         "//tensorflow/python:util",
     ],
 )

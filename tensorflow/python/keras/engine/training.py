@@ -49,6 +49,8 @@ from tensorflow.python.keras.engine import training_distributed
 from tensorflow.python.keras.engine import training_eager
 from tensorflow.python.keras.engine import training_generator
 from tensorflow.python.keras.engine import training_utils
+from tensorflow.python.keras.engine import training_v2
+from tensorflow.python.keras.engine import training_v2_utils
 from tensorflow.python.keras.saving import saving_utils
 from tensorflow.python.keras.utils import data_utils
 from tensorflow.python.keras.utils import losses_utils
@@ -143,12 +145,14 @@ class Model(network.Network):
     # initializing _distribution_strategy here since it is possible to call
     # predict on a model without compiling it.
     self._distribution_strategy = None
+
     # This flag is used to track if the user is using the deprecated path of
     # passing distribution strategy to compile rather than creating the model
     # under distribution strategy scope.
     self._compile_distribution = False
 
     self._run_eagerly = None
+    self._run_distributed = False
 
   def get_weights(self):
     """Retrieves the weights of the model.
@@ -236,6 +240,15 @@ class Model(network.Network):
     """
     _keras_api_gauge.get_cell('compile').set(True)
     self._run_eagerly = kwargs.pop('run_eagerly', None)
+    self._run_distributed = kwargs.pop('run_distributed', False)
+
+    if ((sample_weight_mode is not None)
+        or (target_tensors is not None)
+        or (weighted_metrics is not None)
+        or (kwargs.get('cloning', False))
+        or not context.executing_eagerly()):
+      # Fallback out of things that aren't supported with v2 loops
+      self._run_distributed = False
 
     if distribute is not None:
       if tf2.enabled():
@@ -262,10 +275,11 @@ class Model(network.Network):
     # of enabling the feature and graduate it to the main distributed code path.
     self._cloning = kwargs.pop('cloning', False)
 
-    self._validate_compile_param_for_distribution_strategy(self.run_eagerly,
-                                                           sample_weight_mode,
-                                                           target_tensors,
-                                                           weighted_metrics)
+    if not self._run_distributed:
+      self._validate_compile_param_for_distribution_strategy(self.run_eagerly,
+                                                             sample_weight_mode,
+                                                             target_tensors,
+                                                             weighted_metrics)
     self.optimizer = optimizers.get(optimizer)
     # We've disabled automatic dependency tracking for this method, but do want
     # to add a checkpoint dependency on the optimizer if it's trackable.
@@ -375,6 +389,11 @@ class Model(network.Network):
                 '  model=_create_model()\n'
                 '  model.compile(...)'% (v, strategy))
 
+  @trackable.no_automatic_dependency_tracking
+  def _init_distributed_function_cache_if_not_compiled(self):
+    if not hasattr(self, '_distributed_function_cache'):
+      self._distributed_function_cache = {}
+
   @property
   def metrics(self):
     """Returns the model's metrics added using `compile`, `add_metric` APIs."""
@@ -452,6 +471,18 @@ class Model(network.Network):
 
   def _select_training_loop(self, inputs):
     """Select training loop for fit/eval/predict based on the inputs."""
+    # Experiment training loop with default DS path.
+    if (context.executing_eagerly()
+        and self._run_distributed
+        and not isinstance(inputs, (iterator_ops.Iterator,
+                                    iterator_ops.IteratorV2))
+        # TODO(scottzhu): Finish getting sequences working with the v2 loops.
+        and not isinstance(inputs, (data_utils.Sequence))
+        and not distributed_training_utils.is_tpu_strategy(
+            self._distribution_strategy)
+        and not getattr(self, '_cloning', False)):
+      return training_v2.Loop()
+
     # Case 1: distribution strategy.
     if self._distribution_strategy:
       if multi_worker_util.in_multi_worker_mode():
@@ -904,6 +935,11 @@ class Model(network.Network):
     Raises:
       ValueError: In case of invalid user-provided arguments.
     """
+    if self._run_distributed:
+      return training_v2_utils.train_on_batch(
+          self, x, y=y, sample_weight=sample_weight,
+          class_weight=class_weight, reset_metrics=reset_metrics)
+
     self._assert_compile_was_called()
     # If at this point we are in the replica context, then it is okay to execute
     # the Eager code path.  The expected way to get here is to call `fit` that
@@ -985,6 +1021,11 @@ class Model(network.Network):
     Raises:
         ValueError: In case of invalid user-provided arguments.
     """
+    if self._run_distributed:
+      return training_v2_utils.test_on_batch(
+          self, x, y=y, sample_weight=sample_weight,
+          reset_metrics=reset_metrics)
+
     self._assert_compile_was_called()
     if (self._distribution_strategy and
         distribution_strategy_context.in_cross_replica_context()):
@@ -1036,6 +1077,9 @@ class Model(network.Network):
         ValueError: In case of mismatch between given number of inputs and
           expectations of the model.
     """
+    if self._run_distributed:
+      return training_v2_utils.predict_on_batch(self, x)
+
     if (self._distribution_strategy and
         distribution_strategy_context.in_cross_replica_context()):
       raise NotImplementedError(
@@ -1569,6 +1613,7 @@ class Model(network.Network):
             # differentiate between use case where a custom optimizer
             # expects a vector loss value vs unreduced per-sample loss value.
             output_loss = loss_fn(y_true, y_pred, sample_weight=sample_weight)
+            loss_reduction = losses_utils.ReductionV2.SUM_OVER_BATCH_SIZE
 
         if len(self.outputs) > 1:
           # Keep track of stateful result tensor for the loss.
@@ -1576,9 +1621,7 @@ class Model(network.Network):
 
         # Scale output loss for distribution. For custom losses we assume
         # reduction was mean.
-        if (getattr(loss_fn, 'reduction',
-                    losses_utils.ReductionV2.SUM_OVER_BATCH_SIZE) ==
-            losses_utils.ReductionV2.SUM_OVER_BATCH_SIZE):
+        if loss_reduction == losses_utils.ReductionV2.SUM_OVER_BATCH_SIZE:
           output_loss = losses_utils.scale_loss_for_distribution(output_loss)
 
         if total_loss is None:
@@ -2106,12 +2149,11 @@ class Model(network.Network):
 
       first_x_value = nest.flatten(x)[0]
       if isinstance(first_x_value, np.ndarray):
-        x = distributed_training_utils.list_to_tuple(x)
+        x = training_utils.list_to_tuple(x)
         if y is not None:
-          y = distributed_training_utils.list_to_tuple(y)
+          y = training_utils.list_to_tuple(y)
           if sample_weight is not None:
-            sample_weight = distributed_training_utils.list_to_tuple(
-                sample_weight)
+            sample_weight = training_utils.list_to_tuple(sample_weight)
             in_tuple = (x, y, sample_weight)
           else:
             in_tuple = (x, y)
@@ -2375,6 +2417,7 @@ class Model(network.Network):
           loss_weights=self.loss_weights,
           target_tensors=target_tensors,
           run_eagerly=self.run_eagerly,
+          run_distributed=self._run_distributed,
           cloning=self._cloning)
 
     # In graph mode, if we had just set inputs and targets as symbolic tensors

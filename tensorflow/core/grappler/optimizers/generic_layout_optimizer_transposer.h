@@ -63,9 +63,11 @@ struct TransposeContext {
   std::unique_ptr<utils::MutableGraphView> graph_view;
   std::unique_ptr<const VirtualPlacer> virtual_placer;
 
+  string target_device;
   string src_format;
   string dst_format;
-  string target_device;
+  absl::flat_hash_map<char, int> src_dim_indices;
+  absl::flat_hash_map<char, int> dst_dim_indices;
   std::vector<int> src_to_dst;
   std::vector<int> dst_to_src;
 };
@@ -199,6 +201,14 @@ class DefaultLayoutSensitiveOpTransposer : public LayoutSensitiveOpTransposer {
  public:
   explicit DefaultLayoutSensitiveOpTransposer()
       : LayoutSensitiveOpTransposer() {}
+
+  Status TransposeNode(TransposeContext* context,
+                       utils::MutableNodeView* node) override;
+};
+
+class AvgPoolGradTransposer : public LayoutSensitiveOpTransposer {
+ public:
+  explicit AvgPoolGradTransposer() : LayoutSensitiveOpTransposer() {}
 
   Status TransposeNode(TransposeContext* context,
                        utils::MutableNodeView* node) override;
@@ -372,8 +382,7 @@ class ReduceTransposer : public LayoutAgnosticOpTransposer {
 
  private:
   bool KeepDims(const utils::MutableNodeView& node);
-  bool IsAlongAxis(const utils::MutableNodeView& axis_node,
-                   absl::Span<const int> axis);
+  bool IsAlongAxis(const Tensor& tensor, absl::Span<const int> axis, int rank);
   bool IsReduceAxisSupported(const TransposeContext& context,
                              const utils::MutableNodeView& node);
 };
@@ -446,12 +455,12 @@ class SqueezeTransposer : public LayoutAgnosticOpTransposer {
                        utils::MutableNodeView* node) override;
 
  private:
-  bool IsInputConvertible(const utils::MutableNodeView& node) const;
-  bool IsAlongAxis(const utils::MutableNodeView& node,
-                   absl::Span<const int> axis) const;
-  bool IsAlongHW(const utils::MutableNodeView& node) const;
-  bool IsAlongNHW(const utils::MutableNodeView& node) const;
-  bool IsDimsSupported(const utils::MutableNodeView& node) const;
+  bool IsInputConvertible(const TransposeContext& context,
+                          const utils::MutableNodeView& node) const;
+  bool IsAlongAxis(const AttrValue& attr, absl::Span<const int> axis,
+                   int rank) const;
+  bool IsDimsSupported(const TransposeContext& context,
+                       const utils::MutableNodeView& node) const;
   Status UpdateSqueezeDims(TransposeContext* context,
                            utils::MutableNodeView* node);
 };
@@ -561,6 +570,10 @@ bool IsMaxPoolV2(const NodeDef& node);
 
 bool IsMaxPoolGradV2(const NodeDef& node);
 
+bool IsMaxPoolGradGradV1(const NodeDef& node);
+
+bool IsMaxPoolGradGradV2(const NodeDef& node);
+
 bool IsBinaryOp(const NodeDef& node);
 
 bool IsReduceOp(const NodeDef& node);
@@ -574,8 +587,12 @@ bool GetValueAttrIfConstPermTransposeNode(const utils::MutableNodeView& node,
 
 bool IsDataFormatOp(const utils::MutableNodeView& node);
 
-std::vector<int> GetPermutation(absl::string_view src_format,
-                                absl::string_view dst_format);
+absl::flat_hash_map<char, int> GetDimensionIndices(
+    absl::string_view data_format);
+
+std::vector<int> GetPermutation(
+    const absl::flat_hash_map<char, int>& src_dim_indices,
+    absl::string_view dst_format);
 
 }  // namespace grappler
 }  // namespace tensorflow
