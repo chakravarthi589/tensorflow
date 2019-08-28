@@ -115,11 +115,6 @@ class KernelAndDevice : public core::RefCounted {
  protected:
   std::function<void(std::function<void()>)>* get_runner() const;
 
-  // TODO(apassos) Consider a shared cancellation manager. Note that this
-  // cancellation manager is not useful to actually cancel anything, and is
-  // provided here only for the few kernels which can't handle one being
-  // missing.
-  CancellationManager cm_;
   Device* const device_;               // can be null
   Device* const host_cpu_device_;      // non-null
   FunctionLibraryRuntime* const flr_;  // can be null
@@ -137,13 +132,14 @@ class KernelAndDeviceOp final : public KernelAndDevice {
       FunctionLibraryRuntime* flr,
       std::function<void(std::function<void()>)>* runner,
       std::unique_ptr<CollectiveExecutor::Handle> collective_executor,
-      Device* host_cpu_device)
+      Device* host_cpu_device, const bool compile_with_xla = false)
       : KernelAndDevice(flr, runner, std::move(collective_executor),
                         host_cpu_device),
         rendez_(rendez),
-        log_memory_(log_memory) {}
+        log_memory_(log_memory),
+        compile_with_xla_(compile_with_xla) {}
 
-  virtual ~KernelAndDeviceOp();
+  ~KernelAndDeviceOp() override {}
 
   Status Init(const NodeDef& ndef, GraphCollector* graph_collector) override;
 
@@ -177,15 +173,7 @@ class KernelAndDeviceOp final : public KernelAndDevice {
   Rendezvous* const rendez_;
   checkpoint::TensorSliceReaderCacheWrapper slice_reader_cache_;
   const bool log_memory_;
-
-  // For deferred ops, AsyncOpKernel::DoneCallback is called once the op is
-  // enqueued to device. The execution of the op may not finish when
-  // device_->Compute returns. We rely on no_deferred_ops_cv_ to know when the
-  // execution has finished.
-  // Available via OpKernelContext to every OpKernel invocation.
-  mutex num_deferred_ops_mu_;
-  condition_variable no_deferred_ops_cv_;
-  int64 num_deferred_ops_ GUARDED_BY(num_deferred_ops_mu_) = 0;
+  const bool compile_with_xla_;
 };
 
 // Represents a multi-device function. Functions can also be run using
