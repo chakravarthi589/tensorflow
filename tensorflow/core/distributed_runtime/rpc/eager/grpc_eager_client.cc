@@ -75,15 +75,15 @@ class GrpcEagerClient : public EagerClient {
     if (it != enqueue_dispatchers_.end()) {
       it->second.CancelCall();
       enqueue_dispatchers_.erase(request->context_id());
-    } else {
+    } else if (EnableStreaming()) {
       LOG(ERROR) << "Remote EagerContext with id " << request->context_id()
                  << " does not seem to exist.";
     }
   }
 
-  Status StreamingEnqueueAsync(const EnqueueRequest* request,
-                               EnqueueResponse* response,
-                               StatusCallback done) override {
+  void StreamingEnqueueAsync(const EnqueueRequest* request,
+                             EnqueueResponse* response,
+                             StatusCallback done) override {
     if (EnableStreaming()) {
       tf_shared_lock l(mu_);
       auto it = enqueue_dispatchers_.find(request->context_id());
@@ -98,7 +98,6 @@ class GrpcEagerClient : public EagerClient {
         it = it_and_bool.first;
       }
       it->second.SendNextRequest(*request, response, std::move(done));
-      return Status::OK();
     } else {
       Notification n;
       Status status;
@@ -108,7 +107,6 @@ class GrpcEagerClient : public EagerClient {
       });
       n.WaitForNotification();
       done(status);
-      return status;
     }
   }
 

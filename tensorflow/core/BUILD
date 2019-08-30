@@ -113,7 +113,6 @@ load(
     "tf_additional_device_tracer_cuda_deps",
     "tf_additional_device_tracer_deps",
     "tf_additional_device_tracer_test_flags",
-    "tf_additional_gdr_lib_defines",
     "tf_additional_human_readable_json_deps",
     "tf_additional_lib_defines",
     "tf_additional_lib_deps",
@@ -121,12 +120,10 @@ load(
     "tf_additional_libdevice_deps",
     "tf_additional_minimal_lib_srcs",
     "tf_additional_monitoring_hdrs",
-    "tf_additional_mpi_lib_defines",
     "tf_additional_numa_copts",
     "tf_additional_numa_deps",
     "tf_additional_numa_lib_defines",
     "tf_additional_test_deps",
-    "tf_additional_verbs_lib_defines",
     "tf_grpc_service_all",
     "tf_jspb_proto_library",
     "tf_kernel_tests_linkstatic",
@@ -254,6 +251,7 @@ ADDITIONAL_CORE_PROTO_SRCS = [
     # "protobuf/critical_section.proto",
     "protobuf/meta_graph.proto",
     "protobuf/named_tensor.proto",
+    "protobuf/remote_tensor_handle.proto",
     "protobuf/saved_model.proto",
     "protobuf/saved_object_graph.proto",
     "protobuf/struct.proto",
@@ -2424,10 +2422,7 @@ LIB_INTERNAL_PUBLIC_HEADERS = [
 LIB_INTERNAL_DEFINES = (
     tf_additional_lib_defines() + [
         "TF_USE_SNAPPY",
-    ] + tf_additional_verbs_lib_defines() +
-    tf_additional_mpi_lib_defines() +
-    tf_additional_gdr_lib_defines() +
-    tf_additional_numa_lib_defines()
+    ] + tf_additional_numa_lib_defines()
 )
 
 cc_library(
@@ -2495,6 +2490,7 @@ cc_library(
                "//tensorflow/core/platform:numbers",
                "//tensorflow/core/platform:platform_strings",
                "//tensorflow/core/platform:scanner",
+               "//tensorflow/core/platform:strcat",
                "//tensorflow/core/platform:stringprintf",
                "//tensorflow/core/platform:str_util",
                "//tensorflow/core/platform/default/build_config:platformlib",
@@ -3739,6 +3735,7 @@ tf_cc_tests(
         "//tensorflow/core/platform:scanner_test.cc",
         "//tensorflow/core/platform:stacktrace_handler_test.cc",
         "//tensorflow/core/platform:str_util_test.cc",
+        "//tensorflow/core/platform:strcat_test.cc",
         "//tensorflow/core/platform:stringpiece_test.cc",
         "//tensorflow/core/platform:stringprintf_test.cc",
         "//tensorflow/core/platform:subprocess_test.cc",
@@ -3754,6 +3751,7 @@ tf_cc_tests(
         ":test_main",
         "//tensorflow/core/platform:scanner",
         "//tensorflow/core/platform:str_util",
+        "//tensorflow/core/platform:strcat",
         "//tensorflow/core/platform:stringpiece",
         "//tensorflow/core/platform:stringprintf",
         "//third_party/eigen3",
