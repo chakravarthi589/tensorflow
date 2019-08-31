@@ -104,6 +104,11 @@ void ApplySigmoid(const int16_t* input, int32_t n_batch, int32_t n_input,
   PortableApplySigmoid(input, n_batch, n_input, output);
 }
 
+void ApplyTanh0(const int16_t* input, int32_t n_batch, int32_t n_input,
+                int16_t* output) {
+  PortableApplyTanh0(input, n_batch, n_input, output);
+}
+
 void ApplyTanh3(const int16_t* input, int32_t n_batch, int32_t n_input,
                 int16_t* output) {
   PortableApplyTanh3(input, n_batch, n_input, output);
@@ -201,6 +206,10 @@ void ApplyActivationToVector(const float* vector, int v_size,
 
 void Sub1Vector(const float* vector, int v_size, float* result) {
   NEON_OR_PORTABLE(Sub1Vector, vector, v_size, result);
+}
+
+void Sub1Vector(const int16_t* vector, int v_size, int16_t* result) {
+  PortableSub1Vector(vector, v_size, result);
 }
 
 float Clip(float f, float abs_limit) { return PortableClip(f, abs_limit); }

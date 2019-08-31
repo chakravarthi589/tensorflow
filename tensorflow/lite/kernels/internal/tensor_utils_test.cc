@@ -274,6 +274,23 @@ TEST(uKernels, QuantApplyLayerNormTest) {
   EXPECT_THAT(output, testing::ElementsAreArray(expected_output));
 }
 
+// Quantized tanh with Q0.15 input and Q0.15 output.
+TEST(uKernels, QuantTanh0Test) {
+  const std::vector<int16_t> input = {
+      -145, 899, -176, -35,  264, 289,  8,    27,   -37,  -1310,
+      -120, 127, -16,  106,  370, -583, -299, 93,   -548, 548,
+      653,  -29, -53,  1058, -52, -164, -149, -635, 201,  -1297,
+  };
+  std::vector<int16_t> output(2 * 15, 0);
+  ApplyTanh0(input.data(), 2, 15, output.data());
+  const std::vector<int16_t> expected_output = {
+      -136, 904, -176, -40,  260, 292,  8,    28,   -44,  -1304,
+      -120, 120, -24,  112,  376, -576, -308, 88,   -544, 544,
+      652,  -32, -60,  1056, -56, -156, -144, -636, 192,  -1300,
+  };
+  EXPECT_THAT(output, testing::ElementsAreArray(expected_output));
+}
+
 // Quantized tanh with Q3.12 input and Q0.15 output.
 TEST(uKernels, QuantTanh3Test) {
   const std::vector<int16_t> input = {
@@ -1047,6 +1064,24 @@ TEST(uKernels, Sub1VectorTest) {
   Sub1Vector(input, kVectorSize, output.data());
   EXPECT_THAT(output,
               ElementsAreArray(ArrayFloatNear({1.0, 1.5, 0.0, 2.5, -1.0})));
+}
+
+TEST(uKernels, Sub1VectorInt16Test) {
+  constexpr int kVectorSize = 30;
+  static int16_t input[kVectorSize] = {
+      32760, 300,   1,     2,    3, 4, 5, 6, 300, 1000,
+      32767, 32000, 300,   1,    2, 3, 4, 5, 56,  300,
+      1000,  32767, 32761, 1300, 1, 2, 3, 4, 5,   6,
+  };
+  std::vector<int16_t> output(kVectorSize);
+  Sub1Vector(input, kVectorSize, output.data());
+  EXPECT_THAT(
+      output,
+      testing::ElementsAreArray({
+          7,     32467, 32766, 32765, 32764, 32763, 32762, 32761, 32467, 31767,
+          0,     767,   32467, 32766, 32765, 32764, 32763, 32762, 32711, 32467,
+          31767, 0,     6,     31467, 32766, 32765, 32764, 32763, 32762, 32761,
+      }));
 }
 
 TEST(uKernels, VectorBatchVectorCwiseProductAccumulate) {
