@@ -75,7 +75,6 @@ _top_level_modules = [
     "tensorflow.compiler",
     "tensorflow.lite",
     "tensorflow.keras",
-    "tensorflow.contrib",
     "tensorflow.compat",
     "tensorflow.summary",  # tensorboard
     "tensorflow.examples",
@@ -107,6 +106,11 @@ if not isinstance(_sys.modules[__name__], _deprecation.DeprecationWrapper):
 # These should not be visible in the main tf module.
 try:
   del core
+except NameError:
+  pass
+
+try:
+  del python
 except NameError:
   pass
 
