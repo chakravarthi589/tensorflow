@@ -5,7 +5,6 @@ load(
 )
 load("//tensorflow/compiler/xla:xla.bzl", "xla_proto_library", "xla_py_proto_library")
 load("//tensorflow:tensorflow.bzl", "tf_portable_proto_library")
-load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
 
 package(
     default_visibility = [":internal"],
@@ -17,6 +16,7 @@ package_group(
     packages = [
         "//tensorflow/compiler/aot/...",
         "//tensorflow/compiler/jit/...",
+        "//tensorflow/compiler/mlir/...",
         "//tensorflow/compiler/tests/...",
         "//tensorflow/compiler/tf2xla/...",
         "//tensorflow/python/compiler/...",
@@ -212,8 +212,6 @@ cc_library(
         "xla_resource.cc",
         "xla_cpu_backend.cc",
     ] + if_cuda_is_configured([
-        "xla_gpu_backend.cc",
-    ]) + if_rocm_is_configured([
         "xla_gpu_backend.cc",
     ]),
     hdrs = [
@@ -588,6 +586,7 @@ cc_library(
     deps = [
         "//tensorflow/compiler/mlir/tensorflow",
         "//tensorflow/compiler/mlir/tensorflow:convert_graphdef",
+        "//tensorflow/compiler/mlir/tensorflow:mlir_roundtrip_flags",
         "//tensorflow/core:core_cpu_lib",
         "@llvm//:support",
     ],

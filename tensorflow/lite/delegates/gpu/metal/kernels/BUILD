@@ -337,6 +337,28 @@ cc_library(
     ],
 )
 
+objc_library(
+    name = "mul_test_lib",
+    testonly = 1,
+    srcs = ["mul_test.mm"],
+    sdk_frameworks = ["XCTest"],
+    deps = [
+        ":mul",
+        ":test_util",
+    ],
+)
+
+ios_unit_test(
+    name = "mul_test",
+    testonly = 1,
+    minimum_os_version = "9.0",
+    tags = [
+        "notap",
+        "tflite_not_portable_android",
+    ],
+    deps = [":mul_test_lib"],
+)
+
 cc_library(
     name = "padding",
     srcs = ["padding.cc"],
@@ -696,13 +718,21 @@ objc_library(
         "Metal",
     ],
     deps = [
+        "//tensorflow/lite/delegates/gpu/common:convert",
+        "//tensorflow/lite/delegates/gpu/common:model",
         "//tensorflow/lite/delegates/gpu/common:operations",
         "//tensorflow/lite/delegates/gpu/common:shape",
         "//tensorflow/lite/delegates/gpu/common:status",
         "//tensorflow/lite/delegates/gpu/common:tensor",
+        "//tensorflow/lite/delegates/gpu/common:types",
         "//tensorflow/lite/delegates/gpu/common:util",
         "//tensorflow/lite/delegates/gpu/metal:api",
+        "//tensorflow/lite/delegates/gpu/metal:common",
+        "//tensorflow/lite/delegates/gpu/metal:compiled_model",
         "//tensorflow/lite/delegates/gpu/metal:inference_context",
+        "//tensorflow/lite/delegates/gpu/metal:runtime_options",
+        "@FP16",
+        "@com_google_absl//absl/random",
     ],
 )
 

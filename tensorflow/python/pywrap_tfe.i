@@ -20,6 +20,7 @@ limitations under the License.
 %ignore "";
 
 %rename("%s") TF_SetXlaEnableLazyCompilation;
+%rename("%s") TF_SetTfXlaCpuGlobalJit;
 %rename("%s") TF_SetXlaAutoJitMode;
 %rename("%s") TF_SetXlaConstantFoldingDisabled;
 %rename("%s") TF_GetXlaConstantFoldingDisabled;
@@ -42,6 +43,7 @@ limitations under the License.
 %rename("%s") TFE_ContextSetThreadLocalDevicePlacementPolicy;
 %rename("%s") TFE_ContextSetThreadLocalMirroringPolicy;
 %rename("%s") TFE_ContextSetServerDef;
+%rename("%s") TFE_ContextUpdateServerDef;
 %rename("%s") TFE_NewExecutor;
 %rename("%s") TFE_DeleteExecutor;
 %rename("%s") TFE_ExecutorIsAsync;
@@ -87,6 +89,7 @@ limitations under the License.
 %rename("%s") TFE_Py_TapeWatchVariable;
 %rename("%s") TFE_Py_TapeWatchedVariables;
 %rename("%s") TFE_Py_ForwardAccumulatorNew;
+%rename("%s") TFE_Py_ForwardAccumulatorSetAdd;
 %rename("%s") TFE_Py_ForwardAccumulatorSetRemove;
 %rename("%s") TFE_Py_ForwardAccumulatorWatch;
 %rename("%s") TFE_Py_ForwardAccumulatorJVP;

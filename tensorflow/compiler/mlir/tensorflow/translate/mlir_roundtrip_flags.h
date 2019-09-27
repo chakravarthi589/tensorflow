@@ -44,7 +44,7 @@ struct ArrayInfo {
   TensorShapeProto shape;
 };
 
-struct NodeSpecs {
+struct GraphImportConfig {
   using InputArrays =
       llvm::MapVector<string, ArrayInfo, llvm::StringMap<unsigned>>;
   // Maps input node names to node data types and shapes.
@@ -63,9 +63,12 @@ struct NodeSpecs {
   bool convert_legacy_fed_inputs = false;
   // If true, the main graph will be treated as a function.
   bool graph_as_function = false;
+  // If true, upgrade legacy features of the graph (for instance, functionalize
+  // control-flow).
+  bool upgrade_legacy = false;
 };
 
-struct ExporterConfigs {
+struct GraphExportConfig {
   // Whether to export shape attribute for the NodeDefs in the GraphDef.
   bool export_shapes = true;
   // Whether to export library field in the GraphDef.
@@ -99,7 +102,7 @@ Status ParseInputArrayInfo(absl::string_view array_names,
                            absl::string_view inference_type,
                            absl::string_view min_values,
                            absl::string_view max_values,
-                           NodeSpecs::InputArrays* inputs);
+                           GraphImportConfig::InputArrays* inputs);
 
 Status ParseInputArrayInfo(const std::vector<string>& node_names,
                            const std::vector<string>& node_dtypes,
@@ -107,7 +110,7 @@ Status ParseInputArrayInfo(const std::vector<string>& node_names,
                            DataType inference_type,
                            const std::vector<float>& node_mins,
                            const std::vector<float>& node_maxs,
-                           NodeSpecs::InputArrays* inputs);
+                           GraphImportConfig::InputArrays* inputs);
 
 }  // namespace tensorflow
 

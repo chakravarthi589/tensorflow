@@ -265,39 +265,39 @@ Attribute ConstFoldUnaryOp(Type result_type, Attribute operand,
   return {};
 }
 
-void buildComparisonBinOp(Builder *builder, OperationState *result, Value *lhs,
+void buildComparisonBinOp(Builder *builder, OperationState &result, Value *lhs,
                           Value *rhs) {
   auto result_type =
       OpTrait::util::getBroadcastedType(lhs->getType(), rhs->getType());
   if (!result_type)
-    emitError(result->location)
+    emitError(result.location)
         << "non-broadcastable operands: " << lhs->getType() << " and "
         << rhs->getType();
-  result->addOperands({lhs, rhs});
+  result.addOperands({lhs, rhs});
   // Comparison binary ops always return i1 tensor.
   if (auto shaped_type = result_type.dyn_cast<ShapedType>()) {
     auto resultShape = shaped_type.getShape();
-    result->types.push_back(
+    result.types.push_back(
         builder->getTensorType(resultShape, builder->getI1Type()));
   } else {
-    result->types.push_back(builder->getTensorType(builder->getI1Type()));
+    result.types.push_back(builder->getTensorType(builder->getI1Type()));
   }
 }
 
-void buildFusedBroadcastableBinOp(Builder *builder, OperationState *result,
+void buildFusedBroadcastableBinOp(Builder *builder, OperationState &result,
                                   Value *lhs, Value *rhs,
                                   StringAttr fused_activation_function) {
   auto result_type =
       OpTrait::util::getBroadcastedType(lhs->getType(), rhs->getType());
 
   if (!result_type)
-    emitError(result->location)
+    emitError(result.location)
         << "non-broadcastable operands: " << lhs->getType() << " and "
         << rhs->getType();
 
-  result->addOperands({lhs, rhs});
-  result->addAttribute("fused_activation_function", fused_activation_function);
-  result->types.push_back(result_type);
+  result.addOperands({lhs, rhs});
+  result.addAttribute("fused_activation_function", fused_activation_function);
+  result.types.push_back(result_type);
 }
 
 }  // end anonymous namespace
@@ -522,7 +522,7 @@ OpFoldResult ConcatenationOp::fold(ArrayRef<Attribute> operands) {
 // GatherOp
 //===----------------------------------------------------------------------===//
 
-static void BuildGatherOp(Builder *builder, OperationState *result,
+static void BuildGatherOp(Builder *builder, OperationState &result,
                           Value *params, Value *indices, IntegerAttr axis) {
   auto params_type = params->getType().cast<TensorType>();
   auto indices_type = indices->getType().cast<TensorType>();
@@ -549,7 +549,7 @@ static void BuildGatherOp(Builder *builder, OperationState *result,
 
   // params must be atleast rank axis + 1
   if (params_rank < axis_i + 1) {
-    emitError(result->location, "params must be atleast rank axis + 1");
+    emitError(result.location, "params must be atleast rank axis + 1");
   }
 
   if (indices_rank == 0) {
@@ -626,6 +626,46 @@ static LogicalResult Verify(PackOp op) {
 }
 
 //===----------------------------------------------------------------------===//
+// PReluOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult Verify(PReluOp op) {
+  auto input_type = op.input()->getType().cast<ShapedType>();
+  auto alpha_type = op.alpha()->getType().cast<ShapedType>();
+  auto output_type = op.output()->getType().cast<ShapedType>();
+
+  if (input_type.hasStaticShape() && alpha_type.hasStaticShape()) {
+    if (input_type.getRank() != alpha_type.getRank() + 1) {
+      return op.emitOpError("'alpha' should have one less rank than 'input'.");
+    }
+
+    // Check if alpha is broadcastable
+    for (int i = 0; i < alpha_type.getRank(); i++) {
+      if (alpha_type.getDimSize(i) != input_type.getDimSize(i + 1) &&
+          alpha_type.getDimSize(i) != 1) {
+        return op.emitOpError(
+            llvm::formatv("'alpha' is not broadcastable at dimension {0}.", i));
+      }
+    }
+  }
+
+  if (input_type.hasStaticShape() && output_type.hasStaticShape()) {
+    if (input_type.getRank() != output_type.getRank()) {
+      return op.emitOpError("'input' and 'output' should have the same rank.");
+    }
+
+    // Check if input and output shapes are same
+    for (int i = 0; i < input_type.getRank(); i++) {
+      if (input_type.getDimSize(i) != output_type.getDimSize(i)) {
+        return op.emitOpError(
+            "'input' and 'output' should have the same shape.");
+      }
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // ReshapeOp
 //===----------------------------------------------------------------------===//
 
@@ -694,6 +734,68 @@ OpFoldResult ReshapeOp::fold(ArrayRef<Attribute> operands) {
 void ReshapeOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
                                             MLIRContext *context) {
   results.insert<RemoveAdjacentReshape>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// PackOp
+//===----------------------------------------------------------------------===//
+
+// Remove redunant unpack pack op.
+// If a unpack op is followed by a pack op, we can remove the pack op, if the
+// unpack op is only consumed by the pack op, it will be removed as well.
+// An example illustration is:
+//                  Unpack [5, 8, 9], axis = 1
+//                /       \
+//            value  ...  value [5, 9], 8 values in total
+//              \           /
+//                 pack,   axis = 1
+//                   |
+//               value   [5, 8, 9]
+//
+//   This can actually be simplified into just:
+//
+//           =>   Value [5, 8, 9]
+// TODO(b/133341698): Move to tablegen when variadic is supported.
+struct RemoveRedunantUnpackPack : public RewritePattern {
+  explicit RemoveRedunantUnpackPack(MLIRContext *context)
+      : RewritePattern(PackOp::getOperationName(), 2, context) {}
+
+  PatternMatchResult matchAndRewrite(Operation *op,
+                                     PatternRewriter &rewriter) const override {
+    TFL::PackOp pack_op = cast<TFL::PackOp>(op);
+    Operation *first_input = pack_op.getOperand(0)->getDefiningOp();
+    if (!first_input) return matchFailure();
+    auto input_unpack_op = dyn_cast_or_null<TFL::UnpackOp>(first_input);
+    if (!input_unpack_op) return matchFailure();
+
+    // The unpack & pack should have the same axis & num inputs/outputs.
+    if (pack_op.axis() != input_unpack_op.axis() ||
+        pack_op.values_count() != input_unpack_op.num())
+      return matchFailure();
+
+    const int total_pack_inputs = pack_op.getNumOperands();
+    if (total_pack_inputs != input_unpack_op.getNumResults())
+      return matchFailure();
+    for (auto input_output :
+         llvm::zip(pack_op.getOperands(), input_unpack_op.getResults())) {
+      Value *pack_input = std::get<0>(input_output);
+      Value *unpack_output = std::get<1>(input_output);
+      // Make sure the ordering is the same for the pack op & unpack op.
+      if (pack_input != unpack_output) return matchFailure();
+    }
+
+    // Replace the pack's output to the unpack's input.
+    rewriter.replaceOp(pack_op, input_unpack_op.getOperand());
+    // At this point, we don't manually remove the redundant pack op & unpack op
+    // (we cannot actually), but trust the PatterRewriter to garbage collect
+    // these two ops.
+    return matchSuccess();
+  }
+};
+
+void PackOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                         MLIRContext *context) {
+  results.insert<RemoveRedunantUnpackPack>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -780,7 +882,7 @@ OpFoldResult SubOp::fold(ArrayRef<Attribute> operands) {
 // TopKOp
 //===----------------------------------------------------------------------===//
 
-static void BuildTopKOp(Builder *builder, OperationState *result, Value *input,
+static void BuildTopKOp(Builder *builder, OperationState &result, Value *input,
                         Value *k) {
   // Output size is only known if k is constant value. A negative dimension is
   // considered dynamic so use -1 here if k is not a constant value.

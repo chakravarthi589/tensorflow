@@ -19,7 +19,7 @@ visibility = [
     "//bazel_pip/tensorflow/lite/toco/python:__pkg__",
 ]
 
-load("//tensorflow:tensorflow.bzl", "if_mlir", "if_not_v2", "if_not_windows", "py_test", "py_tests", "tf_cc_shared_object", "tf_cuda_library", "tf_gen_op_wrapper_py", "tf_py_build_info_genrule", "tf_py_test")
+load("//tensorflow:tensorflow.bzl", "if_mlir", "if_not_windows", "py_test", "py_tests", "tf_cc_shared_object", "tf_cuda_library", "tf_gen_op_wrapper_py", "tf_py_build_info_genrule", "tf_py_test", "cc_header_only_library")
 load("//tensorflow:tensorflow.bzl", "tf_python_pybind_extension")
 load("//tensorflow:tensorflow.bzl", "pybind_extension")
 load("//tensorflow:tensorflow.bzl", "tf_py_wrap_cc")
@@ -98,6 +98,7 @@ py_library(
         "//third_party/py/tensorflow_core:__subpackages__",
     ],
     deps = [
+        ":_pywrap_events_writer",
         ":_pywrap_stat_summarizer",
         ":_pywrap_tfprof",
         ":_pywrap_util_port",
@@ -145,6 +146,7 @@ py_library(
         ":rnn_ops_gen",
         ":saver_test_utils",
         ":script_ops",
+        ":sendrecv_ops_gen",
         ":session_ops",
         ":sets",
         ":sparse_ops",
@@ -451,7 +453,7 @@ tf_python_pybind_extension(
     ],
 )
 
-pybind_extension(
+tf_python_pybind_extension(
     name = "_pywrap_util_port",
     srcs = ["util/port_wrapper.cc"],
     hdrs = ["//tensorflow/core:util_port_hdrs"],
@@ -459,6 +461,23 @@ pybind_extension(
     deps = [
         "//tensorflow/core:util_port",
         "//third_party/python_runtime:headers",
+        "@pybind11",
+    ],
+)
+
+tf_python_pybind_extension(
+    name = "_pywrap_events_writer",
+    srcs = ["client/events_writer_wrapper.cc"],
+    module_name = "_pywrap_events_writer",
+    deps = [
+        ":pybind11_absl",
+        ":pybind11_proto",
+        ":pybind11_status",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:protos_all_cc",
+        "//third_party/python_runtime:headers",
+        "@com_google_absl//absl/strings",
         "@pybind11",
     ],
 )
@@ -496,6 +515,24 @@ cc_library(
         "//tensorflow/python/eager:pywrap_tfe_lib",
         "//third_party/py/numpy:headers",
         "//third_party/python_runtime:headers",
+    ],
+)
+
+cc_header_only_library(
+    name = "py_func_headers_lib",
+    deps = [
+        ":py_func_lib",
+    ],
+)
+
+tf_python_pybind_extension(
+    name = "_pywrap_py_func",
+    srcs = ["lib/core/py_func_wrapper.cc"],
+    module_name = "_pywrap_py_func",
+    deps = [
+        ":py_func_headers_lib",
+        "//third_party/python_runtime:headers",
+        "@pybind11",
     ],
 )
 
@@ -772,6 +809,7 @@ py_library(
     ],
     srcs_version = "PY2AND3",
     deps = [
+        ":_pywrap_events_writer",
         ":_pywrap_stat_summarizer",
         ":_pywrap_tfprof",
         ":_pywrap_util_port",
@@ -936,6 +974,7 @@ tf_py_test(
         ":function_def_to_graph",
         ":graph_to_function_def",
         ":math_ops",
+        ":op_def_library",
         ":test_ops",
     ],
     tags = ["no_pip"],
@@ -993,6 +1032,7 @@ py_library(
     deps = [
         ":dtypes",
         ":framework_ops",
+        ":op_def_registry",
         ":platform",
         ":tensor_shape",
         ":util",
@@ -1002,11 +1042,24 @@ py_library(
     ],
 )
 
+tf_python_pybind_extension(
+    name = "_op_def_registry",
+    srcs = ["framework/op_def_registry.cc"],
+    module_name = "_op_def_registry",
+    deps = [
+        ":pybind11_status",
+        "//tensorflow/core:framework_headers_lib",
+        "//tensorflow/core:protos_all_cc",
+        "@pybind11",
+    ],
+)
+
 py_library(
     name = "op_def_registry",
     srcs = ["framework/op_def_registry.py"],
     srcs_version = "PY2AND3",
     deps = [
+        ":_op_def_registry",
         "//tensorflow/core:protos_all_py",
     ],
 )
@@ -1178,7 +1231,6 @@ cuda_py_test(
         ":util",
     ],
     tags = ["no_pip"],  # test_ops are not available in pip.
-    xla_enable_strict_auto_jit = True,
 )
 
 py_library(
@@ -1646,7 +1698,6 @@ cuda_py_test(
         "noasan",
         "optonly",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 tf_py_test(
@@ -1990,7 +2041,6 @@ tf_py_test(
         ":framework_for_generated_wrappers",
         ":framework_test_lib",
         ":platform_test",
-        ":test_ops",
     ],
 )
 
@@ -2345,6 +2395,13 @@ tf_gen_op_wrapper_private_py(
 tf_gen_op_wrapper_private_py(
     name = "rnn_ops_gen",
     visibility = ["//tensorflow/contrib/rnn:__pkg__"],
+)
+
+tf_gen_op_wrapper_private_py(
+    name = "sendrecv_ops_gen",
+    deps = [
+        "//tensorflow/core:sendrecv_ops_op_lib",
+    ],
 )
 
 tf_gen_op_wrapper_private_py(
@@ -3249,7 +3306,6 @@ cuda_py_test(
     tags = [
         "no_rocm",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 py_library(
@@ -3463,6 +3519,15 @@ py_library(
 )
 
 py_library(
+    name = "parsing_config",
+    srcs = ["ops/parsing_config.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":framework",
+    ],
+)
+
+py_library(
     name = "parsing_ops",
     srcs = ["ops/parsing_ops.py"],
     srcs_version = "PY2AND3",
@@ -3472,6 +3537,7 @@ py_library(
         ":framework",
         ":framework_for_generated_wrappers",
         ":math_ops",
+        ":parsing_config",
         ":parsing_ops_gen",
         ":sparse_ops",
     ],
@@ -3604,6 +3670,7 @@ py_library(
     srcs = ["ops/script_ops.py"],
     srcs_version = "PY2AND3",
     deps = [
+        ":_pywrap_py_func",
         ":array_ops",
         ":framework_for_generated_wrappers",
         ":script_ops_gen",
@@ -4066,7 +4133,6 @@ cuda_py_test(
         ":framework_test_lib",
     ],
     tags = ["no_windows"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4096,7 +4162,6 @@ cuda_py_test(
         "//tensorflow/python/eager:def_function",
     ],
     shard_count = 2,
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4113,7 +4178,6 @@ cuda_py_test(
         ":platform",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 py_test(
@@ -4144,7 +4208,6 @@ cuda_py_test(
         ":platform",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4181,7 +4244,6 @@ cuda_py_test(
         "//tensorflow/python/keras:engine",
     ],
     tags = ["no_oss"],  # b/118709825
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4197,7 +4259,6 @@ cuda_py_test(
         ":variables",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4211,7 +4272,6 @@ cuda_py_test(
         ":image_ops",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4251,7 +4311,6 @@ cuda_py_test(
         "//third_party/py/numpy",
         "//tensorflow/python/eager:context",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4267,7 +4326,6 @@ cuda_py_test(
         "//third_party/py/numpy",
         "//tensorflow/python/eager:context",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4285,7 +4343,6 @@ cuda_py_test(
         "//third_party/py/numpy",
     ],
     tags = ["no_windows_gpu"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4323,7 +4380,6 @@ cuda_py_test(
     ],
     shard_count = 4,
     tags = ["no_windows"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4341,7 +4397,6 @@ cuda_py_test(
     ],
     shard_count = 16,
     tags = ["no_rocm"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4362,7 +4417,6 @@ cuda_py_test(
         "//third_party/py/numpy",
     ],
     tags = ["no_windows"],
-    xla_enable_strict_auto_jit = True,
 )
 
 py_test(
@@ -4390,7 +4444,6 @@ cuda_py_test(
         ":nn_grad",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -4407,7 +4460,6 @@ cuda_py_test(
         "//third_party/py/numpy",
     ],
     tags = ["no_windows_gpu"],
-    xla_enable_strict_auto_jit = True,
 )
 
 py_library(
@@ -4630,6 +4682,7 @@ py_library(
     ],
     srcs_version = "PY2AND3",
     deps = [
+        ":_pywrap_device_lib",
         ":errors",
         ":framework",
         ":framework_for_generated_wrappers",
@@ -4900,25 +4953,23 @@ py_library(
     srcs = ["client/device_lib.py"],
     srcs_version = "PY2AND3",
     deps = [
-        ":pywrap_tensorflow",
+        ":_pywrap_device_lib",
+        "//tensorflow/core:protos_all_py",
     ],
 )
 
-cc_library(
-    name = "cpp_shape_inference",
-    srcs = ["framework/cpp_shape_inference.cc"],
-    hdrs = ["framework/cpp_shape_inference.h"],
-    copts = if_not_windows(["-Wno-sign-compare"]),
-    visibility = ["//visibility:public"],
+tf_python_pybind_extension(
+    name = "_pywrap_device_lib",
+    srcs = ["client/device_lib_wrapper.cc"],
+    module_name = "_pywrap_device_lib",
     deps = [
-        ":cpp_shape_inference_proto_cc",
-        ":numpy_lib",
-        ":py_func_lib",
-        "//tensorflow/c:tf_status_helper",
-        "//tensorflow/core:framework",
-        "//tensorflow/core:lib",
+        ":pybind11_proto",
+        ":pybind11_status",
+        "//tensorflow/core:core_cpu_headers_lib",
+        "//tensorflow/core:framework_internal_headers_lib",
         "//tensorflow/core:protos_all_cc",
-        "//tensorflow/python:ndarray_tensor",
+        "//third_party/python_runtime:headers",
+        "@pybind11",
     ],
 )
 
@@ -4935,7 +4986,6 @@ cuda_py_tests(
         ":platform_test",
         "//tensorflow/core:protos_all_py",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cc_library(
@@ -4996,21 +5046,16 @@ tf_py_wrap_cc(
     name = "pywrap_tensorflow_internal",
     srcs = ["tensorflow.i"],
     swig_includes = [
-        "client/device_lib.i",
-        "client/events_writer.i",
         "client/tf_session.i",
         "client/tf_sessionrun_wrapper.i",
-        "framework/cpp_shape_inference.i",
         "framework/python_op_gen.i",
         "grappler/cluster.i",
         "grappler/cost_analyzer.i",
-        "grappler/graph_analyzer.i",
         "grappler/item.i",
         "grappler/model_analyzer.i",
         "grappler/tf_optimizer.i",
         "lib/core/bfloat16.i",
         "lib/core/py_exception_registry.i",
-        "lib/core/py_func.i",
         "lib/core/strings.i",
         "lib/io/file_io.i",
         "lib/io/py_record_reader.i",
@@ -5037,7 +5082,6 @@ tf_py_wrap_cc(
         ":cost_analyzer_lib",
         ":model_analyzer_lib",
         ":cpp_python_util",
-        ":cpp_shape_inference",
         ":kernel_registry",
         ":numpy_lib",
         ":safe_ptr",
@@ -5055,6 +5099,7 @@ tf_py_wrap_cc(
         "//tensorflow/c:tf_status_helper",
         "//tensorflow/c/eager:c_api",
         "//tensorflow/c/eager:c_api_experimental",
+        "//tensorflow/compiler/mlir:passes",
         "//tensorflow/core/distributed_runtime/rpc:grpc_rpc_factory_registration",
         "//tensorflow/core/distributed_runtime/rpc:grpc_server_lib",
         "//tensorflow/core/distributed_runtime/rpc:grpc_session",
@@ -5119,9 +5164,14 @@ genrule(
     name = "pybind_symbol_target_libs_file",
     srcs = [
         ":cpp_python_util",  # util
+        ":py_func_lib",  # py_func
         "//tensorflow/core:util_port",  # util_port
         "//tensorflow/stream_executor:stream_executor_pimpl",  # stat_summarizer
+        "//tensorflow/core/grappler/graph_analyzer:graph_analyzer_tool",  # graph_analyzer
         "//tensorflow/core/profiler/internal:print_model_analysis",  # tfprof
+        "//tensorflow/core:framework_internal_impl",  # op_def_registry
+        "//tensorflow/core/lib/core:status",  # device_lib
+        "//tensorflow/core:core_cpu_impl",  # device_lib
     ],
     outs = ["pybind_symbol_target_libs_file.txt"],
     cmd = select({
@@ -5361,7 +5411,6 @@ cuda_py_test(
         "no_oss",  # Test flaky due to port collisions.
         "oss_serial",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 tf_py_test(
@@ -5540,7 +5589,6 @@ cuda_py_test(
         "no_gpu",  # b/127386241
         "no_windows_gpu",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 tf_py_test(
@@ -5651,7 +5699,6 @@ cuda_py_test(
         ":client_testlib",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -5675,7 +5722,6 @@ cuda_py_test(
         "no_windows",  # b/139083295: bfloat16 tests fail on Windows
         "notsan",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_tests(
@@ -5785,7 +5831,6 @@ cuda_py_test(
         "//tensorflow/python/data/ops:dataset_ops",
     ],
     tags = ["multi_gpu"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -5822,7 +5867,6 @@ cuda_py_test(
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python/data/ops:dataset_ops",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 tf_py_test(
@@ -5880,7 +5924,6 @@ cuda_py_test(
     ],
     grpc_enabled = True,
     main = "training/session_manager_test.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 tf_py_test(
@@ -6329,7 +6372,6 @@ cuda_py_test(
     ],
     main = "layers/normalization_test.py",
     shard_count = 10,
-    xla_enable_strict_auto_jit = True,
 )
 
 # -----------------------------------------------------------------------------
@@ -6392,7 +6434,6 @@ cuda_py_test(
     ],
     main = "ops/accumulate_n_benchmark.py",
     shard_count = 6,
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6413,7 +6454,6 @@ cuda_py_test(
         ":variables",
     ],
     main = "ops/batch_norm_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6447,7 +6487,6 @@ cuda_py_test(
         "//tensorflow/core:protos_all_py",
     ],
     main = "ops/concat_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6461,7 +6500,6 @@ cuda_py_test(
         "//tensorflow/python/eager:function",
     ],
     main = "ops/control_flow_ops_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6482,7 +6520,6 @@ cuda_py_test(
         "//tensorflow/core:protos_all_py",
     ],
     main = "ops/conv2d_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6501,7 +6538,6 @@ cuda_py_test(
         "//tensorflow/core:protos_all_py",
     ],
     main = "ops/split_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6521,7 +6557,6 @@ cuda_py_test(
         "//tensorflow/core:protos_all_py",
     ],
     main = "ops/transpose_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6530,7 +6565,6 @@ cuda_py_test(
     srcs = ["ops/matmul_benchmark.py"],
     additional_deps = [":matmul_benchmark_main_lib"],
     main = "ops/matmul_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 py_library(
@@ -6573,7 +6607,6 @@ cuda_py_test(
     ],
     main = "ops/matmul_benchmark_test.py",
     tags = ["no_pip"],
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6591,7 +6624,6 @@ cuda_py_test(
     ],
     grpc_enabled = True,
     main = "client/session_benchmark.py",
-    xla_enable_strict_auto_jit = True,
 )
 
 cuda_py_test(
@@ -6605,7 +6637,6 @@ cuda_py_test(
         ":nn_ops",
         "//third_party/py/numpy",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 py_library(
@@ -6805,7 +6836,6 @@ cuda_py_test(
     tags = [
         "grappler",
     ],
-    xla_enable_strict_auto_jit = True,
 )
 
 # TODO(b/131764887) Remove once LayoutOptimizer is swapped out with GenericLayoutOptimizer.
@@ -7024,6 +7054,17 @@ py_library(
     ],
 )
 
+tf_python_pybind_extension(
+    name = "_pywrap_graph_analyzer",
+    srcs = ["grappler/graph_analyzer_tool_wrapper.cc"],
+    module_name = "_pywrap_graph_analyzer",
+    deps = [
+        "//tensorflow/core/grappler/graph_analyzer:graph_analyzer_tool",
+        "@com_google_absl//absl/strings",
+        "@pybind11",
+    ],
+)
+
 py_binary(
     name = "graph_analyzer",
     srcs = [
@@ -7032,8 +7073,8 @@ py_binary(
     python_version = "PY2",
     srcs_version = "PY2AND3",
     deps = [
+        ":_pywrap_graph_analyzer",
         ":framework_for_generated_wrappers",
-        ":pywrap_tensorflow_internal",
     ],
 )
 
@@ -7068,5 +7109,4 @@ cuda_py_test(
     additional_deps = [
         "//tensorflow/python:client_testlib",
     ],
-    xla_enable_strict_auto_jit = True,
 )
