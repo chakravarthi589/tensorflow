@@ -46,7 +46,7 @@ Status LowerLHLOToGPU(mlir::ModuleOp module) {
   // Transform element-wise operations to LinAlg.
   pm.addPass(::mlir::xla_lhlo::createLegalizeToLinalgPass());
   // Go from affine to normal loops.
-  pm.addPass(::mlir::linalg::createLowerLinalgToLoopsPass());
+  pm.addPass(::mlir::linalg::createConvertLinalgToLoopsPass());
   // Lower affine to ordinary loops.
   pm.addPass(::mlir::createLowerAffinePass());
   // Move constants out of the loop.
@@ -57,8 +57,8 @@ Status LowerLHLOToGPU(mlir::ModuleOp module) {
   pm.addPass(::mlir::createSimpleLoopsToGPUPass(/*numBlockDims=*/0,
                                                 /*numThreadDims=*/1));
   // Some basic cleanup.
-  pm.addPass(::mlir::createCanonicalizerPass());
-  pm.addPass(::mlir::createCSEPass());
+  pm.addNestedPass<::mlir::FuncOp>(::mlir::createCanonicalizerPass());
+  pm.addNestedPass<::mlir::FuncOp>(::mlir::createCSEPass());
   // Take launches to launches with kernels.
   pm.addPass(::mlir::createGpuKernelOutliningPass());
 
@@ -76,8 +76,8 @@ Status LowerKernelBodiesToNVVM(mlir::ModuleOp module) {
   auto &kernelPm = pm.nest<::mlir::ModuleOp>();
   kernelPm.addPass(::mlir::createLowerGpuOpsToNVVMOpsPass());
   // Some basic cleanup.
-  kernelPm.addPass(::mlir::createCanonicalizerPass());
-  kernelPm.addPass(::mlir::createCSEPass());
+  kernelPm.addNestedPass<::mlir::FuncOp>(::mlir::createCanonicalizerPass());
+  kernelPm.addNestedPass<::mlir::FuncOp>(::mlir::createCSEPass());
 
   if (failed(pm.run(module))) {
     return InternalError("Lowering to NVVM IR failed.");
