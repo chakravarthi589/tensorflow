@@ -183,7 +183,7 @@ void Print(ReplicateOp op, OpAsmPrinter* p) {
   if (op.getNumOperands()) {
     *p << '(';
     Block& block = op.body().front();
-    interleaveComma(block.getArguments(), *p, [&](BlockArgument* arg) {
+    interleaveComma(block.getArguments(), *p, [&](BlockArgument arg) {
       const int block_arg_num = arg->getArgNumber();
       *p << '[';
       p->printOperands(std::next(op.operand_begin(), block_arg_num * n),
@@ -280,7 +280,7 @@ void BuildReplicateOp(
 
   for (auto& replicated_input : replicated_inputs) {
     DCHECK_EQ(llvm::size(replicated_input.first), n);
-    for (auto* input : replicated_input.first) {
+    for (auto input : replicated_input.first) {
       DCHECK(succeeded(
           VerifyCompatibleTypes(input->getType(), replicated_input.second)));
       state->addOperands(input);
@@ -296,7 +296,7 @@ void BuildReplicateOp(
 void ReplicateOp::build(
     Builder* builder, OperationState& state, int n,
     llvm::ArrayRef<llvm::StringRef> devices,
-    llvm::ArrayRef<std::pair<llvm::ArrayRef<Value*>, Type>> replicated_inputs,
+    llvm::ArrayRef<std::pair<llvm::ArrayRef<Value>, Type>> replicated_inputs,
     llvm::ArrayRef<Type> replica_output_types) {
   BuildReplicateOp(builder, &state, n, devices, replicated_inputs,
                    replica_output_types);
@@ -332,8 +332,7 @@ struct DropEmptyLaunch : public OpRewritePattern<LaunchOp> {
     if (&block.front() != &block.back()) return matchFailure();
 
     // Map launch results to return operands.
-    llvm::SmallVector<Value*, 8> new_rets(block.front().getOperands());
-    rewriter.replaceOp(op, new_rets);
+    rewriter.replaceOp(op, block.front().getOperands());
 
     return matchSuccess();
   }

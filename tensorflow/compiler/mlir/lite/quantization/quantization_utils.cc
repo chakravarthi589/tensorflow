@@ -412,11 +412,11 @@ bool RemoveRedundantStatsOps(mlir::FuncOp func,
 
       if (user->hasTrait<OpTrait::quant::SameOperandsAndResultsScale>() &&
           !PreferResultScale(user)) {
-        for (Value* res : user->getResults()) {
+        for (Value res : user->getResults()) {
           if (res->hasOneUse()) {
             if (auto next_stats = llvm::dyn_cast<quant::StatisticsOp>(
                     *res->getUsers().begin())) {
-              // quantization parameters can be propgated to next_stats
+              // quantization parameters can be propagated to next_stats
               redundant_stats_ops.insert(next_stats);
               // add next_stats to the work list so propagation can
               // continue.

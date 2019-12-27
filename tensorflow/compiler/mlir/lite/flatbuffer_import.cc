@@ -98,6 +98,17 @@ using xla::StatusOr;
 namespace errors = tensorflow::errors;
 namespace tfl = mlir::TFL;
 
+using llvm::cl::opt;
+
+// Commandline flag to enable the control of flatbuffer import.
+bool use_external_constant;
+
+// NOLINTNEXTLINE
+static opt<bool, true> use_external_constant_flag(
+    "use-external-constant",
+    llvm::cl::desc("Use external constant during flatbuffer import"),
+    llvm::cl::location(use_external_constant), llvm::cl::init(false));
+
 namespace {
 bool IsScalar(const TensorT& tensor) {
   // TODO(b/138222071) We can't distinguish scalars and unranked tensors
@@ -201,7 +212,7 @@ StatusOr<mlir::TensorType> GetTensorType(const TensorT& tensor, Builder builder,
 // type, thus none stats op is required and nullptr is retruned.
 // If the min max information is invalid, nullptr is returned.
 mlir::Operation* ConvertMinMaxToStatsOp(const TensorT& tensor, OpBuilder b,
-                                        Value* res) {
+                                        Value res) {
   // If the `tensor` has scale/zero_point, it must have been quantized, then the
   // min/max stats is just for comments, so ignore it.
   if (!tensor.quantization || IsQuantized(tensor)) return nullptr;
@@ -391,6 +402,21 @@ StatusOr<mlir::ElementsAttr> ConvertIntBuffer(
   }
 }
 
+StatusOr<Operation*> BuildExternalConstOp(const tflite::TensorT& tensor,
+                                          int32_t buffer_index,
+                                          OpBuilder builder, Location loc) {
+  TF_ASSIGN_OR_RETURN(auto type, GetTensorType(tensor, builder,
+                                               /*shapeless_are_scalars=*/true,
+                                               /*is_constant=*/true));
+  auto shaped_type = type.dyn_cast<mlir::RankedTensorType>();
+  if (!shaped_type) {
+    return errors::Internal("Constant doesn't have a shape");
+  }
+  auto op = builder.create<tfl::ExternalConstOp>(
+      loc, shaped_type, builder.getI32IntegerAttr(buffer_index));
+  return op.getOperation();
+}
+
 StatusOr<Operation*> BuildConstOp(const tflite::TensorT& tensor,
                                   const std::vector<uint8_t>& buffer,
                                   OpBuilder builder, Location loc) {
@@ -471,12 +497,12 @@ bool IsBasicLSTMOp(tflite::BuiltinOptionsUnion op_union) {
 
 // TODO(krzysd) Handle function calls
 StatusOr<Operation*> ConvertOp(
-    const tflite::OperatorT& op, const std::vector<Value*>& vals_map,
-    Value* optional_arg_marker, const std::vector<std::string>& op_names,
+    const tflite::OperatorT& op, const std::vector<Value>& vals_map,
+    Value optional_arg_marker, const std::vector<std::string>& op_names,
     const std::vector<std::string>& func_names,
     const std::vector<std::unique_ptr<tflite::TensorT>>& tensors, Location loc,
     OpBuilder builder) {
-  llvm::SmallVector<Value*, 4> operands;
+  llvm::SmallVector<Value, 4> operands;
   llvm::SmallVector<mlir::Type, 2> outputTypes;
 
   if (op.outputs.empty()) {
@@ -608,8 +634,8 @@ StatusOr<FuncOp> ConvertSubgraph(
     const std::vector<std::string>& func_names,
     const std::vector<std::unique_ptr<tflite::BufferT>>& buffers,
     Location base_loc, Builder builder,
-    const std::vector<std::string>& ordered_output_arrays,
-    bool is_entry_point) {
+    const std::vector<std::string>& ordered_output_arrays, bool is_entry_point,
+    bool use_external_constant) {
   llvm::SmallVector<mlir::Type, 2> ret_types;
   llvm::SmallVector<mlir::Type, 4> input_types;
 
@@ -666,19 +692,19 @@ StatusOr<FuncOp> ConvertSubgraph(
   auto& body = func.getBody();
   OpBuilder op_builder{body};
 
-  std::vector<Value*> vals_map(subgraph.tensors.size(), nullptr);
-  Value* maybe_optional_arg_marker = nullptr;
+  std::vector<Value> vals_map(subgraph.tensors.size(), nullptr);
+  Value maybe_optional_arg_marker = nullptr;
 
   // Get or construct MLIR values for each input
   for (int i = 0, e = subgraph.inputs.size(); i < e; i++) {
     auto input_tensor = subgraph.inputs[i];
     const auto& tensor = *subgraph.tensors.at(input_tensor);
     auto loc = TensorLoc(tensor, builder, base_loc);
-    if (nullptr != vals_map[input_tensor]) {
+    if (vals_map[input_tensor]) {
       auto err = errors::FailedPrecondition("duplicate input arguments");
       return emitError(loc, err.ToString()), err;
     }
-    Value* input_value = func.getArgument(i);
+    Value input_value = func.getArgument(i);
 
     // If the `tensor` has min/max and doesn't have scale/zero_point
     // information, a stats op is created to use the input_value, then the
@@ -719,12 +745,15 @@ StatusOr<FuncOp> ConvertSubgraph(
                                             builder.getUnitAttr())
                   .getResult();
         }
-      } else if (nullptr == vals_map.at(input_num)) {
+      } else if (!vals_map.at(input_num)) {
         auto& const_tensor = *subgraph.tensors[input_num];
         auto const_loc = TensorLoc(const_tensor, builder, base_loc);
         auto op_or_err =
-            BuildConstOp(const_tensor, buffers[const_tensor.buffer]->data,
-                         op_builder, const_loc);
+            use_external_constant
+                ? BuildExternalConstOp(const_tensor, const_tensor.buffer,
+                                       op_builder, const_loc)
+                : BuildConstOp(const_tensor, buffers[const_tensor.buffer]->data,
+                               op_builder, const_loc);
         if (!op_or_err.ok()) {
           return emitError(const_loc, op_or_err.status().ToString()),
                  op_or_err.status();
@@ -739,7 +768,7 @@ StatusOr<FuncOp> ConvertSubgraph(
             ? base_loc
             : TensorLoc(*subgraph.tensors[op->outputs[0]], builder, base_loc);
     // If there's an optional argument, maybe_optional_arg_marker has been set
-    // to a valid Value*
+    // to a valid Value
     TF_ASSIGN_OR_RETURN(
         auto* mlir_op,
         ConvertOp(*op, vals_map, maybe_optional_arg_marker, op_names,
@@ -762,14 +791,17 @@ StatusOr<FuncOp> ConvertSubgraph(
   }
 
   // Construct return values
-  llvm::SmallVector<Value*, 4> return_operands;
+  llvm::SmallVector<Value, 4> return_operands;
   for (auto index : func_outputs) {
-    if (nullptr == vals_map.at(index)) {
+    if (!vals_map.at(index)) {
       auto& const_tensor = *subgraph.tensors[index];
       auto const_loc = TensorLoc(const_tensor, builder, base_loc);
       auto op_or_err =
-          BuildConstOp(const_tensor, buffers[const_tensor.buffer]->data,
-                       op_builder, const_loc);
+          use_external_constant
+              ? BuildExternalConstOp(const_tensor, const_tensor.buffer,
+                                     op_builder, const_loc)
+              : BuildConstOp(const_tensor, buffers[const_tensor.buffer]->data,
+                             op_builder, const_loc);
       if (!op_or_err.ok()) {
         return emitError(const_loc, op_or_err.status().ToString()),
                op_or_err.status();
@@ -804,7 +836,8 @@ std::string SubgraphName(unsigned index, const tflite::SubGraphT& subgraph) {
 
 OwningModuleRef tflite::FlatBufferToMlir(
     absl::string_view buffer, MLIRContext* context, Location base_loc,
-    const std::vector<std::string>& ordered_output_arrays) {
+    const std::vector<std::string>& ordered_output_arrays,
+    bool use_external_constant) {
   auto model_ptr =
       FlatBufferModel::VerifyAndBuildFromBuffer(buffer.data(), buffer.length());
   if (nullptr == model_ptr) {
@@ -858,7 +891,8 @@ OwningModuleRef tflite::FlatBufferToMlir(
         // Only the entry point needs pseudo_input_ops
         // TODO(b/131175224,b/132239787) Support multiple entry points
         builder, ordered_output_arrays,
-        /*is_entry_point=*/e.index() == 0);
+        /*is_entry_point=*/e.index() == 0,
+        /*use_external_constant=*/use_external_constant);
     if (!func_or_error.ok()) {
       return emitError(base_loc, "could not translate function ")
                  << subgraph->name,
@@ -872,7 +906,8 @@ OwningModuleRef tflite::FlatBufferToMlir(
 }
 
 static OwningModuleRef FlatBufferFileToMlirTrans(llvm::SourceMgr* source_mgr,
-                                                 MLIRContext* context) {
+                                                 MLIRContext* context,
+                                                 bool use_external_constant) {
   const llvm::MemoryBuffer* input =
       source_mgr->getMemoryBuffer(source_mgr->getMainFileID());
   std::string error;
@@ -889,11 +924,12 @@ static OwningModuleRef FlatBufferFileToMlirTrans(llvm::SourceMgr* source_mgr,
 
   return tflite::FlatBufferToMlir(
       absl::string_view(input->getBufferStart(), input->getBufferSize()),
-      context, loc, outputs);
+      context, loc, outputs, use_external_constant);
 }
 
 static mlir::TranslateToMLIRRegistration FlatBufferFileToMlirTransReg(
     "tflite-flatbuffer-to-mlir",
     [](llvm::SourceMgr& source_mgr, MLIRContext* context) {
-      return FlatBufferFileToMlirTrans(&source_mgr, context);
+      return FlatBufferFileToMlirTrans(&source_mgr, context,
+                                       use_external_constant);
     });

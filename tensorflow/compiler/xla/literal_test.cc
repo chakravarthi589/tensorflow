@@ -1134,7 +1134,7 @@ TEST_F(LiteralUtilTest, CopyFromDifferentShapes) {
 TEST_F(LiteralUtilTest, F16) {
   // Verify that the internal data views are consistent and that they
   // are in little endian format
-  // TODO - modify if we make the data format machine endianess dependent
+  // TODO - modify if we make the data format machine endianness dependent
   Literal m1 = Literal::CreateFromShape(ShapeUtil::MakeShape(F16, {2, 2}));
   const char* d1 = reinterpret_cast<const char*>(m1.data<half>().data());
   EXPECT_EQ(d1[0], 0);
@@ -2059,6 +2059,11 @@ TEST_F(LiteralUtilTest, GetAsComplex128) {
   EXPECT_EQ(*c5.GetAsComplex128({}), other_value);
   Literal c6 = LiteralUtil::CreateR0<int64>(1);
   EXPECT_FALSE(c6.GetAsComplex128({}).has_value());
+}
+
+TEST_F(LiteralUtilTest, SliceOnBool) {
+  Literal c1 = LiteralUtil::CreateR1<bool>({true, true, false});
+  EXPECT_EQ(c1, c1.Slice({0}, {3}));
 }
 
 TEST_F(LiteralUtilTest, IsEqualAt) {

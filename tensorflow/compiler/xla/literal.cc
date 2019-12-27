@@ -248,7 +248,7 @@ Status MutableLiteralBase::CopySliceFromInternal(
     TF_RET_CHECK(src_base.size() == copy_size.size());
 
     // Scan the source from minor, stepping in copy size blocks, then within
-    // the index enumaration functor, do a strided copy advancing source index
+    // the index enumeration functor, do a strided copy advancing source index
     // by one (walking through the minor dimension), and destination index by
     // proper stride size at the matching dimension.
     DimensionVector src_indexes(src_base.size(), 0);
@@ -738,14 +738,14 @@ Literal LiteralBase::SliceInternal(
     const Shape& result_shape, absl::Span<const int64> start_indices) const {
   Literal result_literal(result_shape);
   DimensionVector new_indices(result_shape.rank());
-  result_literal.EachCell<NativeT>(
-      [&](absl::Span<const int64> indices, NativeT /*value*/) {
-        for (int64 i = 0; i < result_shape.rank(); ++i) {
-          new_indices[i] = indices[i] + start_indices[i];
-        }
-        NativeT value = Get<NativeT>(new_indices);
-        result_literal.Set<NativeT>(indices, value);
-      });
+  CHECK(result_literal
+            .Populate<NativeT>([&](absl::Span<const int64> indices) {
+              for (int64 i = 0; i < result_shape.rank(); ++i) {
+                new_indices[i] = indices[i] + start_indices[i];
+              }
+              return Get<NativeT>(new_indices);
+            })
+            .ok());
   return result_literal;
 }
 

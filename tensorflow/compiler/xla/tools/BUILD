@@ -206,6 +206,7 @@ tf_cc_test(
         ":hlo_extractor",
         "//tensorflow/compiler/xla/service:hlo_matchers",
         "//tensorflow/compiler/xla/tests:hlo_test_base",
+        "//tensorflow/compiler/xla/tests:xla_internal_test_main",
         "//tensorflow/core:test",
     ],
 )
@@ -341,4 +342,34 @@ tf_cc_binary(
         "//tensorflow/core/platform:test",
         "@com_google_absl//absl/strings",
     ],
+)
+
+# Same as run_hlo_module, but supports the MLIR GPU backend instead of the XLA
+# GPU backend.
+tf_cc_binary(
+    name = "run_hlo_module_mlir_gpu",
+    testonly = True,
+    srcs = ["run_hlo_module_main.cc"],
+    deps = [
+        ":run_hlo_module_lib",
+        "//tensorflow/compiler/xla:debug_options_flags",
+        "//tensorflow/compiler/xla/service:cpu_plugin",
+        "//tensorflow/compiler/xla/service:interpreter_plugin",
+        "//tensorflow/compiler/xla/service:mlir_gpu_plugin",
+        "//tensorflow/core:framework_internal",
+        "//tensorflow/core/platform:logging",
+        "//tensorflow/core/platform:platform_port",
+        "//tensorflow/core/platform:status",
+        "//tensorflow/core/platform:test",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+# This target is used to reproduce miscompiles in OSS outside of TF, and it can
+# not have any dependencies apart from the standard library.
+cc_library(
+    name = "driver",
+    srcs = ["driver.cc"],
+    tags = ["nofixdeps"],
+    deps = [],
 )

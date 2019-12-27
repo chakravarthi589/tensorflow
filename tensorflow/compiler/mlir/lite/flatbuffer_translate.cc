@@ -56,6 +56,7 @@ limitations under the License.
 #include "mlir/Translation.h"  // TF:local_config_mlir
 #include "tensorflow/compiler/mlir/lite/flatbuffer_operator.h"
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
+#include "tensorflow/compiler/mlir/lite/utils/convert_type.h"
 #include "tensorflow/compiler/mlir/lite/utils/stateful_ops_utils.h"
 #include "tensorflow/compiler/mlir/op_or_arg_name_mapper.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -230,7 +231,7 @@ static bool IsConst(Operation* op) {
 }
 
 template <typename T>
-static bool HasValidTFLiteType(Value* value, T& error_handler) {
+static bool HasValidTFLiteType(Value value, T& error_handler) {
   // None type is allowed to represent unspecified operands.
   if (value->getType().isa<NoneType>()) return true;
 
@@ -279,7 +280,7 @@ static bool IsValidTFLiteMlirModule(ModuleOp module) {
     }
     auto& bb = fn.getBlocks().front();
 
-    for (auto* arg : bb.getArguments()) {
+    for (auto arg : bb.getArguments()) {
       if (!HasValidTFLiteType(arg, fn))
         return fn.emitError("invalid TFLite type: ") << arg->getType(), false;
     }
@@ -289,7 +290,7 @@ static bool IsValidTFLiteMlirModule(ModuleOp module) {
     for (auto& inst : bb) {
       if (inst.isKnownTerminator()) break;
 
-      for (auto* result : inst.getResults()) {
+      for (auto result : inst.getResults()) {
         if (!HasValidTFLiteType(result, inst))
           return fn.emitError("invalid TFLite type: ") << result->getType(),
                  false;
@@ -361,7 +362,7 @@ class Translator {
 
   // Builds TFLite tensor from the given value. `buffer_idx` is index of the
   // corresponding buffer. Emits error and returns llvm::None on failure.
-  Optional<BufferOffset<tflite::Tensor>> BuildTensor(Value* value,
+  Optional<BufferOffset<tflite::Tensor>> BuildTensor(Value value,
                                                      const std::string& name,
                                                      unsigned buffer_idx);
 
@@ -372,6 +373,10 @@ class Translator {
       const std::vector<int32_t>& results);
   BufferOffset<tflite::Operator> BuildWhileOperator(
       mlir::TF::WhileOp op, const std::vector<int32_t>& operands,
+      const std::vector<int32_t>& results);
+
+  BufferOffset<tflite::Operator> BuildNumericVerifyOperator(
+      mlir::TFL::NumericVerifyOp op, const std::vector<int32_t>& operands,
       const std::vector<int32_t>& results);
 
   Optional<CustomOptionsOffset> CreateFlexOpCustomOptions(
@@ -414,8 +419,8 @@ class Translator {
   // is marked as a stateful operand.
   bool IsStatefulOperand(mlir::Operation* op, int operand_index);
 
-  // Returns a unique name for `op`.
-  std::string UniqueName(mlir::Operation* op);
+  // Returns a unique name for `val`.
+  std::string UniqueName(mlir::Value val);
 
   ModuleOp module_;
 
@@ -445,8 +450,8 @@ class Translator {
   std::vector<std::string> failed_custom_ops_;
 };
 
-std::string Translator::UniqueName(mlir::Operation* op) {
-  return name_mapper_.GetUniqueName(op);
+std::string Translator::UniqueName(mlir::Value val) {
+  return name_mapper_.GetUniqueName(val);
 }
 
 Optional<BufferOffset<tflite::Buffer>> Translator::BuildBuffer(
@@ -498,7 +503,7 @@ Optional<BufferOffset<tflite::Buffer>> Translator::BuildBuffer(
 }
 
 Optional<BufferOffset<tflite::Tensor>> Translator::BuildTensor(
-    Value* value, const std::string& name, unsigned buffer_idx) {
+    Value value, const std::string& name, unsigned buffer_idx) {
   auto type = value->getType().cast<TensorType>();
 
   // TFLite requires tensor shape only for the inputs and constants.
@@ -610,6 +615,21 @@ BufferOffset<tflite::Operator> Translator::BuildWhileOperator(
                                 builtin_options);
 }
 
+BufferOffset<tflite::Operator> Translator::BuildNumericVerifyOperator(
+    mlir::TFL::NumericVerifyOp op, const std::vector<int32_t>& operands,
+    const std::vector<int32_t>& results) {
+  float tolerance = op.tolerance().convertToFloat();
+  std::vector<uint8_t> custom_options(sizeof(float));
+  memcpy(custom_options.data(), &tolerance, sizeof(float));
+  auto opcode_index =
+      GetOpcodeIndex("NumericVerify", tflite::BuiltinOperator_CUSTOM);
+  return tflite::CreateOperator(
+      builder_, opcode_index, builder_.CreateVector(operands),
+      builder_.CreateVector(results), tflite::BuiltinOptions_NONE,
+      /*builtin_options=*/0, builder_.CreateVector<uint8_t>(custom_options),
+      tflite::CustomOptionsFormat_FLEXBUFFERS);
+}
+
 Optional<CustomOptionsOffset> Translator::CreateFlexOpCustomOptions(
     const ::tensorflow::NodeDef& node_def, const mlir::Location& loc) {
   std::string node_def_str;
@@ -650,6 +670,16 @@ Translator::CreateFlexBuilderWithNodeAttrs(
       case ::tensorflow::AttrValue::kS:
         flex_builder->String(key, attr.s());
         break;
+      case ::tensorflow::AttrValue::kType: {
+        auto status_or_tfl_type = tflite::TfTypeToTflType(attr.type());
+        if (status_or_tfl_type.ok()) {
+          flex_builder->Int(key, status_or_tfl_type.ValueOrDie());
+        } else {
+          emitWarning(loc, "ignoring unsupported tensorflow type: ")
+              << std::to_string(attr.type());
+        }
+        break;
+      }
       case ::tensorflow::AttrValue::kI:
         flex_builder->Int(key, attr.i());
         break;
@@ -736,6 +766,9 @@ Optional<BufferOffset<tflite::Operator>> Translator::BuildOperator(
 
     auto builtin_code = GetBuiltinOpCode(inst);
     if (!builtin_code) {
+      if (auto verify_op = dyn_cast<mlir::TFL::NumericVerifyOp>(inst)) {
+        return BuildNumericVerifyOperator(verify_op, operands, results);
+      }
       inst->emitOpError("is not a supported TFLite op");
       return llvm::None;
     }
@@ -864,17 +897,7 @@ void Translator::InitializeNamesFromAttribute(FuncOp fn, bool* has_input_attr) {
       return;
     }
     for (const auto& it : llvm::enumerate(term->getOperands())) {
-      // TODO(jpienaar): If this isn't due to an op, then we'd need to either
-      // ensure the name that will be assigned to the buffer is the same, or
-      // insert an op so that we can have a buffer named such. This cannot
-      // currently happen due to pseudo_input nodes.
-      if (auto op = it.value()->getDefiningOp()) {
-        name_mapper_.InitOpName(op, output_names[it.index()].trim());
-      } else {
-        fn.emitWarning() << "output is not due to an op and '"
-                         << output_names[it.index()]
-                         << "' may not be a named output";
-      }
+      name_mapper_.InitOpName(it.value(), output_names[it.index()].trim());
     }
   }
 }
@@ -894,11 +917,11 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
   bool has_input_attr = false;
   InitializeNamesFromAttribute(fn, &has_input_attr);
   std::vector<BufferOffset<tflite::Tensor>> tensors;
-  llvm::DenseMap<Value*, int> tensor_index_map;
+  llvm::DenseMap<Value, int> tensor_index_map;
 
   // Builds tensor and buffer for argument or operation result. Returns false
   // on failure.
-  auto build_tensor_and_buffer = [&](Value* value, const std::string& name) {
+  auto build_tensor_and_buffer = [&](Value value, const std::string& name) {
     // NoneType represents optional and may be skipped here.
     if (value->getType().isa<NoneType>()) {
       return true;
@@ -930,7 +953,7 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
   // have associated tensor and buffer. Build FlatBuffer tensor and buffer for
   // other functions.
   for (unsigned i = 0, e = bb.getNumArguments(); i < e; ++i) {
-    mlir::BlockArgument* arg = bb.getArgument(i);
+    mlir::BlockArgument arg = bb.getArgument(i);
     std::string name;
     if (has_input_attr) name = name_mapper_.GetUniqueName(arg);
     if (name.empty()) name = absl::StrCat("arg", i);
@@ -941,16 +964,9 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
   for (auto& inst : bb) {
     if (inst.isKnownTerminator()) break;
 
-    std::string name = UniqueName(&inst);
-    for (size_t i = 0, e = inst.getNumResults(); i < e; ++i) {
-      // Tensors are named by adding result index to name for the particular
-      // operation such as name:0, name:1, name:2 etc. Default port is zero so
-      // the first result can be specified without the port. This is based on
-      // TensorFlow's naming scheme for inputs in the NodeDef proto.
-      std::string suffix = i > 0 ? absl::StrCat(":", i) : "";
-      if (!build_tensor_and_buffer(inst.getResult(i), name + suffix)) {
-        return llvm::None;
-      }
+    for (auto val : inst.getResults()) {
+      std::string name = UniqueName(val);
+      if (!build_tensor_and_buffer(val, name)) return llvm::None;
     }
 
     // Skip constant ops as they don't represent a TFLite operator.
@@ -959,7 +975,7 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
     // Fetch operand and result tensor indices.
     std::vector<int32_t> operands;
     operands.reserve(inst.getNumOperands());
-    for (auto* operand : inst.getOperands()) {
+    for (auto operand : inst.getOperands()) {
       if (operand->getType().isa<NoneType>())
         operands.push_back(kTfLiteOptionalTensor);
       else
@@ -967,7 +983,7 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
     }
     std::vector<int32_t> results;
     results.reserve(inst.getNumOperands());
-    for (auto* result : inst.getResults()) {
+    for (auto result : inst.getResults()) {
       results.push_back(tensor_index_map.lookup(result));
     }
 
@@ -981,10 +997,10 @@ Optional<BufferOffset<tflite::SubGraph>> Translator::BuildSubGraph(FuncOp fn) {
 
   // Get input and output tensor indices for the subgraph.
   std::vector<int32_t> inputs, outputs;
-  for (auto* arg : bb.getArguments()) {
+  for (auto arg : bb.getArguments()) {
     inputs.push_back(tensor_index_map[arg]);
   }
-  for (auto* result : bb.getTerminator()->getOperands()) {
+  for (auto result : bb.getTerminator()->getOperands()) {
     outputs.push_back(tensor_index_map[result]);
   }
 

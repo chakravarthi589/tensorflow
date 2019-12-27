@@ -1035,7 +1035,7 @@ def placeholder(shape=None,
     dtype = floatx()
   if not shape:
     if ndim:
-      shape = tuple([None for _ in range(ndim)])
+      shape = (None,) * ndim
   with get_graph().as_default():
     if sparse:
       x = array_ops.sparse_placeholder(dtype, shape=shape, name=name)
@@ -1300,7 +1300,6 @@ def zeros(shape, dtype=None, name=None):
     v = array_ops.zeros(shape=shape, dtype=tf_dtype, name=name)
     if py_all(v.shape.as_list()):
       return variable(v, dtype=dtype, name=name)
-    track_variable(v)
     return v
 
 
@@ -1335,7 +1334,6 @@ def ones(shape, dtype=None, name=None):
     v = array_ops.ones(shape=shape, dtype=tf_dtype, name=name)
     if py_all(v.shape.as_list()):
       return variable(v, dtype=dtype, name=name)
-    track_variable(v)
     return v
 
 
@@ -1450,12 +1448,10 @@ def random_uniform_variable(shape, low, high, dtype=None, name=None, seed=None):
 
   Example:
 
-  # TensorFlow example
   >>> kvar = tf.keras.backend.random_uniform_variable((2,3), 0, 1)
   >>> kvar
   <tf.Variable 'Variable:0' shape=(2, 3) dtype=float32, numpy=...,
   dtype=float32)>
-
   """
   if dtype is None:
     dtype = floatx()
@@ -1486,12 +1482,10 @@ def random_normal_variable(shape, mean, scale, dtype=None, name=None,
 
   Example:
 
-  # TensorFlow example
   >>> kvar = tf.keras.backend.random_normal_variable((2,3), 0, 1)
   >>> kvar
   <tf.Variable 'Variable:0' shape=(2, 3) dtype=float32, numpy=...,
   dtype=float32)>
-
   """
   if dtype is None:
     dtype = floatx()
@@ -1628,27 +1622,23 @@ def dot(x, y):
 
   Examples:
 
-  # dot product between tensors
   >>> x = tf.keras.backend.placeholder(shape=(2, 3))
   >>> y = tf.keras.backend.placeholder(shape=(3, 4))
   >>> xy = tf.keras.backend.dot(x, y)
   >>> xy
   <tf.Tensor ... shape=(2, 4) dtype=float32>
 
-  # dot product between tensors
   >>> x = tf.keras.backend.placeholder(shape=(32, 28, 3))
   >>> y = tf.keras.backend.placeholder(shape=(3, 4))
   >>> xy = tf.keras.backend.dot(x, y)
   >>> xy
   <tf.Tensor ... shape=(32, 28, 4) dtype=float32>
 
-  # Theano-like behavior example
   >>> x = tf.keras.backend.random_uniform_variable(shape=(2, 3), low=0, high=1)
   >>> y = tf.keras.backend.ones((4, 3, 5))
   >>> xy = tf.keras.backend.dot(x, y)
   >>> tf.keras.backend.int_shape(xy)
   (2, 4, 5)
-
   """
   if ndim(x) is not None and (ndim(x) > 2 or ndim(y) > 2):
     x_shape = []
@@ -1768,7 +1758,7 @@ def batch_dot(x, y, axes=None):
     else:
       axes = [x_ndim - 1, y_ndim - 2]
 
-  if py_any([isinstance(a, (list, tuple)) for a in axes]):
+  if py_any(isinstance(a, (list, tuple)) for a in axes):
     raise ValueError('Multiple target dimensions are not supported. ' +
                      'Expected: None, int, (int, int), ' +
                      'Provided: ' + str(axes))
@@ -1905,7 +1895,7 @@ def transpose(x):
   <tf.Tensor 'Placeholder_...' shape=(2, 3) dtype=float32>
   >>> input_transposed = tf.keras.backend.transpose(input)
   >>> input_transposed
-  <tf.Tensor 'transpose_...' shape=(3, 2) dtype=float32>
+  <tf.Tensor 'Transpose_...' shape=(3, 2) dtype=float32>
 
 
   """
@@ -2400,7 +2390,6 @@ def maximum(x, y):
 
   Examples:
 
-  # maximum of two tensors
   >>> x = tf.Variable([[1, 2], [3, 4]])
   >>> y = tf.Variable([[2, 1], [0, -1]])
   >>> m = tf.keras.backend.maximum(x, y)
@@ -2408,7 +2397,6 @@ def maximum(x, y):
   <tf.Tensor: shape=(2, 2), dtype=int32, numpy=
   array([[2, 2],
          [3, 4]], dtype=int32)>
-
   """
   return math_ops.maximum(x, y)
 
@@ -4486,7 +4474,7 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
   tf.Tensor([0.10536055 0.8046684  0.06187541], shape=(3,), dtype=float32)
   >>> loss = tf.keras.backend.categorical_crossentropy(a, a)
   >>> print(loss)
-  tf.Tensor([1.1920929e-07 1.1920929e-07 1.19...e-07], shape=(3,),
+  tf.Tensor([1.1920929e-07 1.1920929e-07 1.1920930e-07], shape=(3,),
   dtype=float32)
 
   """
@@ -4580,7 +4568,7 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
     target = flatten(target)
     output = array_ops.reshape(output, [-1, output_shape[-1]])
 
-  if py_any([_is_symbolic_tensor(v) for v in [target, output]]):
+  if py_any(_is_symbolic_tensor(v) for v in [target, output]):
     with get_graph().as_default():
       res = nn.sparse_softmax_cross_entropy_with_logits_v2(
           labels=target, logits=output)
@@ -5424,9 +5412,9 @@ def local_conv(inputs,
     if data_format == 'channels_first':
       slices.append(slice(None))
 
-    slices.extend([slice(position[d] * strides[d],
-                         position[d] * strides[d] + kernel_size[d])
-                   for d in spatial_dimensions])
+    slices.extend(
+        slice(position[d] * strides[d], position[d] * strides[d] +
+              kernel_size[d]) for d in spatial_dimensions)
 
     if data_format == 'channels_last':
       slices.append(slice(None))

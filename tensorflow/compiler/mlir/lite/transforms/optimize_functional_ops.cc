@@ -98,13 +98,13 @@ class FoldIfOp : public OpRewritePattern<TF::IfOp> {
     for (int i = 0, e = func.getNumArguments(); i != e; ++i)
       mapper.map(func.getArgument(i), op.getOperand(i + 1));
 
-    llvm::SmallVector<Value*, 4> updated_results;
+    llvm::SmallVector<Value, 4> updated_results;
     for (auto& op_to_inline : func.getBody().front()) {
       // If this is a terminator, identify the values to use to replace the
       // original If op.
       if (op_to_inline.isKnownTerminator()) {
         updated_results.reserve(op_to_inline.getNumOperands());
-        for (Value* operand : op_to_inline.getOperands())
+        for (Value operand : op_to_inline.getOperands())
           updated_results.push_back(mapper.lookup(operand));
         break;
       }
@@ -132,8 +132,8 @@ class FoldIfOp : public OpRewritePattern<TF::IfOp> {
 
 // Erases functions from the given candidates that are not referenced by any of
 // the ops in the module.
-static void EraseDeadFuncs(const FuncSet& candiate_funcs, ModuleOp module) {
-  if (candiate_funcs.empty()) return;
+static void EraseDeadFuncs(const FuncSet& candidate_funcs, ModuleOp module) {
+  if (candidate_funcs.empty()) return;
 
   SymbolTable manager(module);
 
@@ -149,7 +149,7 @@ static void EraseDeadFuncs(const FuncSet& candiate_funcs, ModuleOp module) {
     }
   });
 
-  for (FuncOp func : candiate_funcs) {
+  for (FuncOp func : candidate_funcs) {
     if (!in_use_funcs.count(func)) manager.erase(func);
   }
 }

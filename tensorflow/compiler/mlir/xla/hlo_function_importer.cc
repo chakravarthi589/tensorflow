@@ -182,13 +182,12 @@ tensorflow::Status HloFunctionImporter::ImportInstructions(
   // Setup the return type (HLO only supports a single return value).
   TF_ASSIGN_OR_RETURN(auto result,
                       GetMlirValue(computation->root_instruction()));
-  llvm::SmallVector<Value*, 1> return_values({result});
 
   // Create terminator op depending on the parent op of this region.
   if (llvm::isa<FuncOp>(block->getParentOp())) {
-    builder.create<mlir::ReturnOp>(loc, makeArrayRef(return_values));
+    builder.create<mlir::ReturnOp>(loc, result);
   } else {
-    builder.create<mlir::xla_hlo::ReturnOp>(loc, makeArrayRef(return_values));
+    builder.create<mlir::xla_hlo::ReturnOp>(loc, result);
   }
   return tensorflow::Status::OK();
 }
@@ -285,8 +284,20 @@ StatusOr<mlir::Operation*> HloFunctionImporter::ImportInstruction(
       return func_builder
           ->create<mlir::xla_hlo::DynamicUpdateSliceOp>(
               loc, result_type, operands[0], operands[1],
-              llvm::ArrayRef<Value*>(operands.begin() + 2, operands.end()))
+              llvm::ArrayRef<Value>(operands.begin() + 2, operands.end()))
           .getOperation();
+    }
+    case HloOpcode::kInfeed: {
+      attributes.push_back(builder_->getNamedAttr(
+          "infeed_config", mlir::StringAttr::get(instruction->infeed_config(),
+                                                 builder_->getContext())));
+      MakeAndReturn(InfeedOp);
+    }
+    case HloOpcode::kOutfeed: {
+      attributes.push_back(builder_->getNamedAttr(
+          "outfeed_config", mlir::StringAttr::get(instruction->outfeed_config(),
+                                                  builder_->getContext())));
+      MakeAndReturn(OutfeedOp);
     }
     case HloOpcode::kPad: {
       const auto& padding_config = instruction->padding_config();
@@ -359,6 +370,28 @@ StatusOr<mlir::Operation*> HloFunctionImporter::ImportInstruction(
               loc, result_type, operands[0],
               ConvertDimensions(instruction->dimensions()))
           .getOperation();
+    }
+    case HloOpcode::kRng: {
+      auto shape = func_builder->create<mlir::ConstantOp>(
+          loc, Convert(result_type.cast<RankedTensorType>().getShape()));
+      switch (instruction->random_distribution()) {
+        case xla::RNG_UNIFORM:
+          return func_builder
+              ->create<mlir::xla_hlo::RngUniformOp>(
+                  loc, result_type, operands[0], operands[1], shape)
+              .getOperation();
+
+        case xla::RNG_NORMAL:
+          return func_builder
+              ->create<mlir::xla_hlo::RngNormalOp>(
+                  loc, result_type, operands[0], operands[1], shape)
+              .getOperation();
+
+        default:
+          return tensorflow::errors::InvalidArgument(absl::StrCat(
+              "Unsupported distribution: ",
+              RandomDistributionToString(instruction->random_distribution())));
+      }
     }
     case HloOpcode::kWhile: {
       auto op = func_builder->create<mlir::xla_hlo::WhileOp>(
@@ -437,8 +470,10 @@ StatusOr<mlir::Operation*> HloFunctionImporter::ImportInstruction(
       // part of the HLO instruction. They are only a convenience in the XLA
       // builder API.
       NoAttributeCase(kAdd, AddOp);
+      NoAttributeCase(kAfterAll, AfterAllOp);
       NoAttributeCase(kAnd, AndOp);
       NoAttributeCase(kAtan2, Atan2Op);
+      NoAttributeCase(kBitcastConvert, BitcastConvertOp);
       NoAttributeCase(kConvert, ConvertOp);
       NoAttributeCase(kClamp, ClampOp);
       NoAttributeCase(kComplex, ComplexOp);
@@ -460,10 +495,12 @@ StatusOr<mlir::Operation*> HloFunctionImporter::ImportInstruction(
       NoAttributeCase(kPower, PowOp);
       NoAttributeCase(kReal, RealOp);
       NoAttributeCase(kRemainder, RemOp);
+      NoAttributeCase(kReplicaId, ReplicaIdOp);
       // The dimensions attribute is not present on the HLO Reshape instruction.
       // If dimensions are non-default, the XLA builder implements it as a
       // separate transpose.
       NoAttributeCase(kReshape, ReshapeOp);
+      NoAttributeCase(kRoundNearestAfz, RoundOp);
       NoAttributeCase(kRsqrt, RsqrtOp);
       NoAttributeCase(kSelect, SelectOp);
       NoAttributeCase(kShiftLeft, ShiftLeftOp);
@@ -499,9 +536,9 @@ StatusOr<mlir::Operation*> HloFunctionImporter::ImportInstruction(
   }
 }
 
-StatusOr<llvm::SmallVector<mlir::Value*, 4>> HloFunctionImporter::GetOperands(
+StatusOr<llvm::SmallVector<mlir::Value, 4>> HloFunctionImporter::GetOperands(
     HloInstruction* instruction) {
-  llvm::SmallVector<mlir::Value*, 4> operands;
+  llvm::SmallVector<mlir::Value, 4> operands;
   for (const auto& operand : instruction->operands()) {
     auto input_it = instruction_value_map_.find(operand);
     if (input_it == instruction_value_map_.end()) {
@@ -561,6 +598,9 @@ StatusOr<mlir::RankedTensorType> HloFunctionImporter::ConvertTensorType(
 }
 
 StatusOr<mlir::Type> HloFunctionImporter::ConvertType(const Shape& shape) {
+  if (shape.IsToken()) {
+    return mlir::xla_hlo::TokenType::get(builder_->getContext());
+  }
   if (shape.IsTuple()) {
     mlir::Type mlir_type;
     llvm::SmallVector<mlir::Type, 4> contents;
@@ -586,8 +626,7 @@ tensorflow::Status HloFunctionImporter::GetMlirTypes(
   return tensorflow::Status::OK();
 }
 
-StatusOr<Value*> HloFunctionImporter::GetMlirValue(
-    HloInstruction* instruction) {
+StatusOr<Value> HloFunctionImporter::GetMlirValue(HloInstruction* instruction) {
   auto lookup = instruction_value_map_.find(instruction);
   if (lookup != instruction_value_map_.end()) {
     return lookup->second;

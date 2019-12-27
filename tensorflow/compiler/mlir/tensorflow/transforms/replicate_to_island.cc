@@ -60,12 +60,12 @@ llvm::SmallVector<tf_executor::IslandOp, 8> ExpandReplicateIntoReplicas(
   Operation& terminator = replicate_op.GetBody().back();
   llvm::SmallVector<Type, 8> output_types(terminator.getOperandTypes());
   auto control_type = tf_executor::ControlType::get(island_op.getContext());
-  llvm::SmallVector<Value*, 8> replica_inputs(island_op.controlInputs());
+  llvm::SmallVector<Value, 8> replica_inputs(island_op.controlInputs());
 
   // Replace replicate terminator with YieldOp.
   builder->setInsertionPoint(&terminator);
-  builder->create<tf_executor::YieldOp>(
-      terminator.getLoc(), llvm::to_vector<8>(terminator.getOperands()));
+  builder->create<tf_executor::YieldOp>(terminator.getLoc(),
+                                        terminator.getOperands());
   terminator.erase();
 
   builder->setInsertionPoint(island_op);
@@ -149,8 +149,8 @@ void CreateIslandsFromReplicate(const Dialect* tf_dialect,
                                   num_replicas);
 
   // Collect all replica results.
-  llvm::SmallVector<Value*, 8> replicas_outputs(replicate_op.getNumResults(),
-                                                nullptr);
+  llvm::SmallVector<Value, 8> replicas_outputs(replicate_op.getNumResults(),
+                                               nullptr);
   for (auto replica_and_idx : llvm::enumerate(replicas))
     for (auto replica_result_and_idx :
          llvm::enumerate(replica_and_idx.value().outputs()))
@@ -163,7 +163,7 @@ void CreateIslandsFromReplicate(const Dialect* tf_dialect,
 
   // Collect per replica control dependency and add to island operand if replica
   // island has no uses.
-  llvm::SmallVector<Value*, 8> island_operands;
+  llvm::SmallVector<Value, 8> island_operands;
   for (auto& replica : replicas)
     if (replica.use_empty()) island_operands.push_back(replica.control());
 

@@ -156,6 +156,17 @@ void ProfileSummarizer::ProcessProfiles(
       stats_calculator->AddNodeStats(node_name_in_stats, type_in_stats,
                                      node_num, start_us, node_exec_time,
                                      0 /*memory */);
+    } else if (event->event_type ==
+               Profiler::EventType::DELEGATE_OPERATOR_INVOKE_EVENT) {
+      const std::string node_name(event->tag);
+      // Append event_metadata to node name because 'stats_calculator' can not
+      // distinguish two nodes w/ the same 'node_name'.
+      const auto node_name_in_stats =
+          "Delegate/" + node_name + ":" + std::to_string(event->event_metadata);
+
+      stats_calculator->AddNodeStats(node_name_in_stats, "DelegateOpInvoke",
+                                     node_num, start_us, node_exec_time,
+                                     0 /*memory */);
     } else {
       // TODO(b/139812778) consider use a different stats_calculator to record
       // non-op-invoke events so that these could be separated from
@@ -164,14 +175,15 @@ void ProfileSummarizer::ProcessProfiles(
           event->end_mem_usage - event->begin_mem_usage;
       std::string node_name(event->tag);
       node_name += "/" + std::to_string(event->event_subgraph_index);
-      stats_calculator->AddNodeStats(node_name, "Misc Runtime Ops", node_num,
-                                     start_us, node_exec_time,
-                                     node_mem_usage.total_allocated_bytes);
+      stats_calculator->AddNodeStats(node_name, event->tag, node_num, start_us,
+                                     node_exec_time,
+                                     node_mem_usage.max_rss_kb * 1000.0);
     }
 
     // Add total time except actual delegate ops since the elapsed time of the
     // delegate ops inside are already combined at a fused DELEGATE op.
-    if (strcmp(event->tag, "DelegateOpInvoke") != 0) {
+    if (event->event_type !=
+        Profiler::EventType::DELEGATE_OPERATOR_INVOKE_EVENT) {
       total_us_per_subgraph_map[subgraph_index] += node_exec_time;
     }
     ++node_num;

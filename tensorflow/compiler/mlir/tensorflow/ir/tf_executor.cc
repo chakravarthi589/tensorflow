@@ -216,7 +216,7 @@ LogicalResult Verify(GraphOp graph) {
     return fetch.emitOpError() << "does not have enough operands to cover the "
                                   "graph returned values";
   for (int i : llvm::seq<int>(0, fetch.getNumOperands())) {
-    Value *operand = fetch.getOperand(i);
+    Value operand = fetch.getOperand(i);
     // Break out of the loop at the first control operand encountered.
     if (operand->getType().isa<ControlType>()) {
       if (i != graph.getNumResults())
@@ -408,8 +408,7 @@ ParseResult ParseIslandOp(OpAsmParser &parser, OperationState &result) {
     if (!wrapped_op) return failure();
     OpBuilder builder(parser.getBuilder().getContext());
     builder.setInsertionPointToEnd(&block);
-    builder.create<YieldOp>(wrapped_op->getLoc(),
-                            llvm::to_vector<8>(wrapped_op->getResults()));
+    builder.create<YieldOp>(wrapped_op->getLoc(), wrapped_op->getResults());
     result.location = wrapped_op->getLoc();
   } else if (parser.parseRegion(body, llvm::None, llvm::None)) {
     return failure();
@@ -537,7 +536,7 @@ LogicalResult Verify(SwitchNOp switchn) {
            << (switchn.getNumResults() - 1);
 
   auto operand0_type = switchn.getOperand(0)->getType();
-  for (Value *result : switchn.outputs())
+  for (Value result : switchn.outputs())
     if (operand0_type != result->getType())
       return switchn.emitOpError()
              << "type mismatch between data operand and result: "
@@ -825,7 +824,7 @@ ParseResult ParseEnterOp(OpAsmParser &parser, OperationState &result) {
 namespace {
 
 LogicalResult Verify(NextIterationSourceOp source) {
-  Value *token = source.token();
+  Value token = source.token();
   if (!token->hasOneUse())
     return source.emitOpError() << "expects a single user for produced token";
   if (!isa<NextIterationSinkOp>(*token->user_begin()))
@@ -859,7 +858,7 @@ ParseResult ParseNextIterationSourceOp(OpAsmParser &parser,
 namespace {
 
 LogicalResult Verify(NextIterationSinkOp sink) {
-  Value *token = sink.token();
+  Value token = sink.token();
   Operation *definingOp = token->getDefiningOp();
   if (!definingOp)
     return sink.emitOpError() << "expects a token directly produced by a "
@@ -1065,8 +1064,7 @@ struct DropEmptyGraph : public OpRewritePattern<GraphOp> {
     if (&block.front() != &block.back()) return matchFailure();
 
     // Map graph results to fetch operands.
-    llvm::SmallVector<Value *, 8> new_rets(op.GetFetch().fetches());
-    rewriter.replaceOp(op, new_rets);
+    rewriter.replaceOp(op, op.GetFetch().fetches());
 
     return matchSuccess();
   }
@@ -1089,8 +1087,8 @@ struct HoistInnerOpsSingleIslandGraph : public OpRewritePattern<GraphOp> {
     YieldOp yield_op = island_op.GetYield();
 
     // Map graph results to inner ops results of single island.
-    llvm::SmallVector<Value *, 8> new_rets;
-    for (Value *operand : fetch_op.fetches()) {
+    llvm::SmallVector<Value, 8> new_rets;
+    for (Value operand : fetch_op.fetches()) {
       // Control results should not be propagated out.
       if (operand->getType().isa<ControlType>()) break;
 
@@ -1099,7 +1097,7 @@ struct HoistInnerOpsSingleIslandGraph : public OpRewritePattern<GraphOp> {
         new_rets.push_back(operand);
       } else {
         // Lookup yield operand in island for inner op result.
-        auto result = llvm::cast<OpResult>(operand);
+        auto result = operand->cast<OpResult>();
         new_rets.push_back(yield_op.getOperand(result->getResultNumber()));
       }
     }

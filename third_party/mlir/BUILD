@@ -12,7 +12,6 @@ package_group(
     packages = ["//..."],
 )
 
-# Before adding a project here, please read go/mlir-sla
 # In particular the OWNERS file of the dependent project should be updated.
 # TODO(b/140669524): Use proper MLIR tests instead of end-to-end tests for
 # tf_runtime and tf_runtime_google.
@@ -107,6 +106,7 @@ cc_library(
         "include/mlir/IR/Attributes.h",
         "include/mlir/IR/Block.h",
         "include/mlir/IR/BlockAndValueMapping.h",
+        "include/mlir/IR/BlockSupport.h",
         "include/mlir/IR/Builders.h",
         "include/mlir/IR/Diagnostics.h",
         "include/mlir/IR/Dialect.h",
@@ -167,6 +167,7 @@ cc_library(
         "include/mlir/Pass/Pass.h",
         "include/mlir/Pass/PassInstrumentation.h",
         "include/mlir/Pass/PassManager.h",
+        "include/mlir/Pass/PassOptions.h",
         "include/mlir/Pass/PassRegistry.h",
     ],
     includes = ["include"],
@@ -343,6 +344,21 @@ cc_library(
 )
 
 cc_library(
+    name = "DialectUtils",
+    srcs = [
+    ],
+    hdrs = [
+        "include/mlir/Dialect/Utils/StructuredOpsUtils.h",
+    ],
+    includes = ["include"],
+    deps = [
+        ":IR",
+        ":Support",
+        "@llvm//:support",
+    ],
+)
+
+cc_library(
     name = "AffineOps",
     srcs = [
         "include/mlir/Transforms/InliningUtils.h",
@@ -475,7 +491,7 @@ cc_library(
     name = "VectorOps",
     srcs = [
         "lib/Dialect/VectorOps/VectorOps.cpp",
-        "lib/Dialect/VectorOps/VectorToVector.cpp",
+        "lib/Dialect/VectorOps/VectorTransforms.cpp",
     ],
     hdrs = [
         "include/mlir/Dialect/VectorOps/Utils.h",
@@ -484,12 +500,13 @@ cc_library(
     ],
     includes = ["include"],
     deps = [
+        ":DialectUtils",
         ":EDSC",
         ":IR",
         ":StandardOps",
         ":Support",
         ":VectorOpsIncGen",
-        ":VectorTransformPatterns",
+        ":VectorTransformPatternsIncGen",
         "@llvm//:support",
     ],
 )
@@ -509,6 +526,7 @@ cc_library(
         "lib/Support/ToolUtilities.cpp",
     ],
     hdrs = [
+        "include/mlir/ADT/TypeSwitch.h",
         "include/mlir/Support/DebugStringHelper.h",
         "include/mlir/Support/FileUtilities.h",
         "include/mlir/Support/Functional.h",
@@ -580,6 +598,7 @@ filegroup(
     name = "GPUOpsTdFiles",
     srcs = [
         "include/mlir/Dialect/GPU/GPUOps.td",
+        "include/mlir/Dialect/LLVMIR/LLVMOpBase.td",
         ":OpBaseTdFiles",
     ],
 )
@@ -760,6 +779,7 @@ cc_library(
     includes = ["include"],
     deps = [
         ":GPUDialect",
+        ":IR",
         ":LoopOps",
         ":Pass",
         ":SPIRVDialect",
@@ -1105,6 +1125,7 @@ cc_library(
     ],
     includes = ["include"],
     deps = [
+        ":CommonFolders",
         ":IR",
         ":Parser",
         ":SPIRVCanonicalizationIncGen",
@@ -1472,6 +1493,7 @@ cc_library(
         "lib/Analysis/CallGraph.cpp",
         "lib/Analysis/Dominance.cpp",
         "lib/Analysis/InferTypeOpInterface.cpp",
+        "lib/Analysis/Liveness.cpp",
         "lib/Analysis/LoopAnalysis.cpp",
         "lib/Analysis/MemRefBoundCheck.cpp",
         "lib/Analysis/NestedMatcher.cpp",
@@ -1489,6 +1511,7 @@ cc_library(
         "include/mlir/Analysis/CallInterfaces.h",
         "include/mlir/Analysis/Dominance.h",
         "include/mlir/Analysis/InferTypeOpInterface.h",
+        "include/mlir/Analysis/Liveness.h",
         "include/mlir/Analysis/LoopAnalysis.h",
         "include/mlir/Analysis/NestedMatcher.h",
         "include/mlir/Analysis/Passes.h",
@@ -1579,8 +1602,8 @@ cc_library(
         ":LLVMIRModuleTranslation",
         ":Support",
         ":Translation",
-        "//third_party/llvm/llvm-project/llvm:ir_reader",
         "@llvm//:core",
+        "@llvm//:ir_reader",
         "@llvm//:support",
     ],
     alwayslink = 1,
@@ -2131,6 +2154,7 @@ filegroup(
     srcs = [
         "include/mlir/Dialect/Linalg/IR/LinalgBase.td",
         "include/mlir/Dialect/Linalg/IR/LinalgOps.td",
+        "include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td",
         ":AffineOpsTdFiles",
         ":OpBaseTdFiles",
     ],
@@ -2157,40 +2181,64 @@ gentbl(
 )
 
 filegroup(
-    name = "LinalgLibraryOpsTdFiles",
+    name = "LinalgStructuredOpsTdFiles",
     srcs = [
         "include/mlir/Dialect/Linalg/IR/LinalgBase.td",
-        "include/mlir/Dialect/Linalg/IR/LinalgLibraryOps.td",
+        "include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td",
         ":AffineOpsTdFiles",
         ":OpBaseTdFiles",
     ],
 )
 
 gentbl(
-    name = "LinalgLibraryOpsIncGen",
+    name = "LinalgStructuredOpsIncGen",
     strip_include_prefix = "include",
     tbl_outs = [
         (
             "-gen-op-decls",
-            "include/mlir/Dialect/Linalg/IR/LinalgLibraryOps.h.inc",
+            "include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.h.inc",
         ),
         (
             "-gen-op-defs",
-            "include/mlir/Dialect/Linalg/IR/LinalgLibraryOps.cpp.inc",
+            "include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.cpp.inc",
         ),
         (
             "-gen-op-interface-decls",
-            "include/mlir/Dialect/Linalg/IR/LinalgLibraryOpInterfaces.h.inc",
+            "include/mlir/Dialect/Linalg/IR/LinalgStructuredOpsInterfaces.h.inc",
         ),
         (
             "-gen-op-interface-defs",
-            "include/mlir/Dialect/Linalg/IR/LinalgLibraryOpInterfaces.cpp.inc",
+            "include/mlir/Dialect/Linalg/IR/LinalgStructuredOpsInterfaces.cpp.inc",
         ),
     ],
     tblgen = ":mlir-tblgen",
-    td_file = "include/mlir/Dialect/Linalg/IR/LinalgLibraryOps.td",
+    td_file = "include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td",
     td_srcs = [
-        ":LinalgLibraryOpsTdFiles",
+        ":LinalgStructuredOpsTdFiles",
+    ],
+)
+
+filegroup(
+    name = "LinalgDocTdFiles",
+    srcs = [
+        "include/mlir/Dialect/Linalg/IR/LinalgDoc.td",
+        ":LinalgOpsTdFiles",
+    ],
+)
+
+gentbl(
+    name = "LinalgDocIncGen",
+    strip_include_prefix = "include",
+    tbl_outs = [
+        (
+            "-gen-op-doc",
+            "g3doc/Dialects/Linalg/LinalgOps.md",
+        ),
+    ],
+    tblgen = ":mlir-tblgen",
+    td_file = "include/mlir/Dialect/Linalg/IR/LinalgDoc.td",
+    td_srcs = [
+        ":LinalgDocTdFiles",
     ],
 )
 
@@ -2199,8 +2247,8 @@ filegroup(
     srcs = [
         "include/mlir/Dialect/Linalg/Transforms/LinalgTransformPatterns.td",
         ":AffineOpsTdFiles",
-        ":LinalgLibraryOpsTdFiles",
         ":LinalgOpsTdFiles",
+        ":LinalgStructuredOpsTdFiles",
         ":OpBaseTdFiles",
     ],
 )
@@ -2253,6 +2301,7 @@ cc_library(
     name = "Linalg",
     srcs = [
         "lib/Dialect/Linalg/Analysis/DependenceAnalysis.cpp",
+        "lib/Dialect/Linalg/EDSC/Builders.cpp",
         "lib/Dialect/Linalg/IR/LinalgOps.cpp",
         "lib/Dialect/Linalg/IR/LinalgTypes.cpp",
         "lib/Dialect/Linalg/Transforms/Fusion.cpp",
@@ -2264,6 +2313,8 @@ cc_library(
     ],
     hdrs = [
         "include/mlir/Dialect/Linalg/Analysis/DependenceAnalysis.h",
+        "include/mlir/Dialect/Linalg/EDSC/Builders.h",
+        "include/mlir/Dialect/Linalg/EDSC/Intrinsics.h",
         "include/mlir/Dialect/Linalg/IR/LinalgOps.h",
         "include/mlir/Dialect/Linalg/IR/LinalgTraits.h",
         "include/mlir/Dialect/Linalg/IR/LinalgTypes.h",
@@ -2274,17 +2325,18 @@ cc_library(
     ],
     includes = ["include"],
     deps = [
-        "LinalgTransformPatternsIncGen",
         ":AffineOps",
         ":AffineToStandardTransforms",
         ":Analysis",
         ":CFGTransforms",
+        ":DialectUtils",
         ":EDSC",
         ":IR",
         ":LLVMDialect",
         ":LLVMTransforms",
-        ":LinalgLibraryOpsIncGen",
         ":LinalgOpsIncGen",
+        ":LinalgStructuredOpsIncGen",
+        ":LinalgTransformPatternsIncGen",
         ":LoopOps",
         ":Parser",
         ":Pass",
@@ -2292,6 +2344,7 @@ cc_library(
         ":Support",
         ":TransformUtils",
         ":Transforms",
+        ":VectorOps",
         "@llvm//:core",
         "@llvm//:support",
     ],
@@ -2335,6 +2388,7 @@ cc_library(
         ":IR",
         ":QuantOps",
         ":StandardOps",
+        ":Support",
         "@llvm//:support",
     ],
 )
@@ -2394,8 +2448,21 @@ gentbl(
     ],
 )
 
+filegroup(
+    name = "VectorTransformPatternsTdFiles",
+    srcs = [
+        "include/mlir/Dialect/VectorOps/VectorTransformPatterns.td",
+        ":AffineOpsTdFiles",
+        ":LinalgOpsTdFiles",
+        ":LinalgStructuredOpsTdFiles",
+        ":OpBaseTdFiles",
+        ":StdOpsTdFiles",
+        ":VectorOpsTdFiles",
+    ],
+)
+
 gentbl(
-    name = "VectorTransformPatterns",
+    name = "VectorTransformPatternsIncGen",
     tbl_outs = [
         (
             "-gen-rewriters",
@@ -2405,9 +2472,7 @@ gentbl(
     tblgen = ":mlir-tblgen",
     td_file = "include/mlir/Dialect/VectorOps/VectorTransformPatterns.td",
     td_srcs = [
-        ":OpBaseTdFiles",
-        ":StdOpsTdFiles",
-        ":VectorOpsTdFiles",
+        ":VectorTransformPatternsTdFiles",
     ],
 )
 
