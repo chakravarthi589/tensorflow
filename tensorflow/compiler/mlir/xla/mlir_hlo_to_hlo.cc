@@ -27,16 +27,16 @@ limitations under the License.
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/StandardOps/Ops.h"  // TF:local_config_mlir
-#include "mlir/IR/Attributes.h"  // TF:local_config_mlir
-#include "mlir/IR/Function.h"  // TF:local_config_mlir
-#include "mlir/IR/Location.h"  // TF:local_config_mlir
-#include "mlir/IR/MLIRContext.h"  // TF:local_config_mlir
-#include "mlir/IR/Matchers.h"  // TF:local_config_mlir
-#include "mlir/IR/Module.h"  // TF:local_config_mlir
-#include "mlir/IR/Operation.h"  // TF:local_config_mlir
-#include "mlir/IR/StandardTypes.h"  // TF:local_config_mlir
-#include "mlir/IR/TypeUtilities.h"  // TF:local_config_mlir
+#include "mlir/Dialect/StandardOps/Ops.h"  // TF:llvm-project
+#include "mlir/IR/Attributes.h"  // TF:llvm-project
+#include "mlir/IR/Function.h"  // TF:llvm-project
+#include "mlir/IR/Location.h"  // TF:llvm-project
+#include "mlir/IR/MLIRContext.h"  // TF:llvm-project
+#include "mlir/IR/Matchers.h"  // TF:llvm-project
+#include "mlir/IR/Module.h"  // TF:llvm-project
+#include "mlir/IR/Operation.h"  // TF:llvm-project
+#include "mlir/IR/StandardTypes.h"  // TF:llvm-project
+#include "mlir/IR/TypeUtilities.h"  // TF:llvm-project
 #include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
 #include "tensorflow/compiler/mlir/xla/type_to_shape.h"
 #include "tensorflow/compiler/xla/client/lib/matrix.h"
@@ -162,10 +162,10 @@ static std::vector<xla::ReplicaGroup> Convert_replica_groups(
   return result;
 }
 
-#define I64_ELEMENTS_ATTR_TO_VECTOR(attribute)   \
-  static std::vector<int64> Convert_##attribute( \
-      mlir::DenseIntElementsAttr attribute) {    \
-    return ConvertDenseIntAttr(attribute);       \
+#define I64_ELEMENTS_ATTR_TO_VECTOR(attribute)                \
+  static std::vector<int64> Convert_##attribute(              \
+      llvm::Optional<mlir::DenseIntElementsAttr> attribute) { \
+    return ConvertDenseIntAttr(attribute);                    \
   }
 
 I64_ELEMENTS_ATTR_TO_VECTOR(broadcast_sizes);
@@ -176,6 +176,9 @@ I64_ELEMENTS_ATTR_TO_VECTOR(strides);
 I64_ELEMENTS_ATTR_TO_VECTOR(slice_sizes);
 I64_ELEMENTS_ATTR_TO_VECTOR(fft_length);
 I64_ELEMENTS_ATTR_TO_VECTOR(dimensions);
+I64_ELEMENTS_ATTR_TO_VECTOR(window_strides);
+I64_ELEMENTS_ATTR_TO_VECTOR(lhs_dilation);
+I64_ELEMENTS_ATTR_TO_VECTOR(rhs_dilation);
 
 #undef I64_ELEMENTS_ATTR_TO_VECTOR
 
@@ -243,7 +246,7 @@ static xla::DotDimensionNumbers Convert_dot_dimension_numbers(
   return dot_dimension_numbers;
 }
 
-static xla::ConvolutionDimensionNumbers Convert_convolution_dimension_numbers(
+static xla::ConvolutionDimensionNumbers Convert_dimension_numbers(
     mlir::xla_hlo::ConvDimensionNumbers input) {
   xla::ConvolutionDimensionNumbers output;
 
@@ -510,21 +513,6 @@ LogicalResult ExportXlaOp(ConstOp op, OpLoweringContext ctx) {
   return failure();
 }
 
-LogicalResult ExportXlaOp(ConvOp op, OpLoweringContext ctx) {
-  auto& value_map = *ctx.values;
-  value_map[op] = xla::ConvGeneralDilated(
-      value_map[op.lhs()], value_map[op.rhs()],
-      Convert_broadcast_dimensions(op.window_strides()),
-      Convert_padding(op.padding()),
-      Convert_broadcast_dimensions(op.lhs_dilation()),
-      Convert_broadcast_dimensions(op.rhs_dilation()),
-      Convert_convolution_dimension_numbers(op.dimension_numbers()),
-      op.feature_group_count().getSExtValue(),
-      op.batch_group_count().getSExtValue(),
-      Convert_precision_config(op.precision_config()).get());
-  return success();
-}
-
 LogicalResult ExportXlaOp(ConvertOp op, OpLoweringContext ctx) {
   auto& value_map = *ctx.values;
   value_map[op] = xla::ConvertElementType(
@@ -669,6 +657,21 @@ LogicalResult ExportXlaOp(SelectAndScatterOp op, OpLoweringContext ctx) {
       ConvertDenseIntAttr(op.window_dimensions()),
       ConvertDenseIntAttr(op.window_strides()), Convert_padding(op.padding()),
       value_map[op.source()], value_map[op.init_value()], scatter);
+  return success();
+}
+
+LogicalResult ExportXlaOp(SendOp op, OpLoweringContext ctx) {
+  auto& value_map = *ctx.values;
+  if (op.is_host_transfer()) {
+    value_map[op] =
+        xla::SendToHost(value_map[op.operand()], value_map[op.token()],
+                        xla::TypeToShape(op.operand().getType()),
+                        Convert_channel_handle(op.channel_id()));
+    return success();
+  }
+  value_map[op] =
+      xla::SendWithToken(value_map[op.operand()], value_map[op.token()],
+                         Convert_channel_handle(op.channel_id()));
   return success();
 }
 

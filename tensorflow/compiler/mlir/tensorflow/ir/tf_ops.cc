@@ -35,28 +35,28 @@ limitations under the License.
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "mlir/Dialect/StandardOps/Ops.h"  // TF:local_config_mlir
-#include "mlir/Dialect/Traits.h"  // TF:local_config_mlir
-#include "mlir/IR/Attributes.h"  // TF:local_config_mlir
-#include "mlir/IR/Builders.h"  // TF:local_config_mlir
-#include "mlir/IR/Diagnostics.h"  // TF:local_config_mlir
-#include "mlir/IR/DialectImplementation.h"  // TF:local_config_mlir
-#include "mlir/IR/Function.h"  // TF:local_config_mlir
-#include "mlir/IR/Location.h"  // TF:local_config_mlir
-#include "mlir/IR/MLIRContext.h"  // TF:local_config_mlir
-#include "mlir/IR/Matchers.h"  // TF:local_config_mlir
-#include "mlir/IR/OpDefinition.h"  // TF:local_config_mlir
-#include "mlir/IR/OpImplementation.h"  // TF:local_config_mlir
-#include "mlir/IR/PatternMatch.h"  // TF:local_config_mlir
-#include "mlir/IR/StandardTypes.h"  // TF:local_config_mlir
-#include "mlir/IR/TypeUtilities.h"  // TF:local_config_mlir
-#include "mlir/IR/Types.h"  // TF:local_config_mlir
-#include "mlir/IR/Value.h"  // TF:local_config_mlir
-#include "mlir/Parser.h"  // TF:local_config_mlir
-#include "mlir/Support/LLVM.h"  // TF:local_config_mlir
-#include "mlir/Support/LogicalResult.h"  // TF:local_config_mlir
-#include "mlir/Support/STLExtras.h"  // TF:local_config_mlir
-#include "mlir/Transforms/InliningUtils.h"  // TF:local_config_mlir
+#include "mlir/Dialect/StandardOps/Ops.h"  // TF:llvm-project
+#include "mlir/Dialect/Traits.h"  // TF:llvm-project
+#include "mlir/IR/Attributes.h"  // TF:llvm-project
+#include "mlir/IR/Builders.h"  // TF:llvm-project
+#include "mlir/IR/Diagnostics.h"  // TF:llvm-project
+#include "mlir/IR/DialectImplementation.h"  // TF:llvm-project
+#include "mlir/IR/Function.h"  // TF:llvm-project
+#include "mlir/IR/Location.h"  // TF:llvm-project
+#include "mlir/IR/MLIRContext.h"  // TF:llvm-project
+#include "mlir/IR/Matchers.h"  // TF:llvm-project
+#include "mlir/IR/OpDefinition.h"  // TF:llvm-project
+#include "mlir/IR/OpImplementation.h"  // TF:llvm-project
+#include "mlir/IR/PatternMatch.h"  // TF:llvm-project
+#include "mlir/IR/StandardTypes.h"  // TF:llvm-project
+#include "mlir/IR/TypeUtilities.h"  // TF:llvm-project
+#include "mlir/IR/Types.h"  // TF:llvm-project
+#include "mlir/IR/Value.h"  // TF:llvm-project
+#include "mlir/Parser.h"  // TF:llvm-project
+#include "mlir/Support/LLVM.h"  // TF:llvm-project
+#include "mlir/Support/LogicalResult.h"  // TF:llvm-project
+#include "mlir/Support/STLExtras.h"  // TF:llvm-project
+#include "mlir/Transforms/InliningUtils.h"  // TF:llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/tensor_format.h"
@@ -1465,6 +1465,59 @@ static LogicalResult Verify(PackOp op) {
     return op.emitError() << "attribute 'axis' should be within range ["
                           << range_begin << ", " << range_end
                           << "); actual value: " << axis;
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// ParseExampleV2Op
+//===----------------------------------------------------------------------===//
+
+static LogicalResult Verify(ParseExampleV2Op op) {
+  // NOTE(mrry): This validates properties of an op that would previously be
+  // validated by the TensorFlow OpDef type checker. In addition to these
+  // checks, the shape inference function for ParseExampleV2 validates the
+  // consistency of the argument and result types.
+
+  // Validate dense variadic input and output lengths.
+  // NOTE(mrry): The Tdense attr is derived from dense_defaults, so we
+  // do not need to validate dense_defaults.
+  auto dense_types_count =
+      std::distance(op.Tdense().begin(), op.Tdense().end());
+  auto dense_values_count =
+      std::distance(op.dense_values().begin(), op.dense_values().end());
+  if (dense_values_count != dense_types_count) {
+    return op.emitError() << "output 'dense_values' should have same length "
+                          << "as attribute 'Tdense'";
+  }
+
+  // Validate sparse variadic output lengths.
+  // NOTE(mrry): The sparse_types attr is derived from sparse_values, so we
+  // do not need to validate sparse_values.
+  auto sparse_types_count =
+      std::distance(op.sparse_types().begin(), op.sparse_types().end());
+  if (op.num_sparse() != sparse_types_count) {
+    return op.emitError() << "attribute 'num_sparse' should be the same as "
+                          << "the length of attribute 'sparse_types'";
+  }
+  if (op.sparse_indices().size() != sparse_types_count) {
+    return op.emitError() << "output 'sparse_indices' should have same length "
+                          << "as attribute 'sparse_types'";
+  }
+  if (op.sparse_shapes().size() != sparse_types_count) {
+    return op.emitError() << "output 'sparse_shapes' should have same length "
+                          << "as attribute 'sparse_types'";
+  }
+
+  // Validate ragged variadic output lengths.
+  auto ragged_value_types_count = std::distance(op.ragged_value_types().begin(),
+                                                op.ragged_value_types().end());
+  auto ragged_split_types_count = std::distance(op.ragged_split_types().begin(),
+                                                op.ragged_split_types().end());
+  if (ragged_value_types_count != ragged_split_types_count) {
+    return op.emitError() << "attribute 'ragged_value_types' should have same "
+                          << "length as attribute 'ragged_split_types'";
   }
 
   return success();

@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "tensorflow/core/common_runtime/costmodel_manager.h"
 #include "tensorflow/core/common_runtime/executor_factory.h"
+#include "tensorflow/core/common_runtime/metrics.h"
 #include "tensorflow/core/common_runtime/pending_counts.h"
 #include "tensorflow/core/common_runtime/renamed_device.h"
 #include "tensorflow/core/common_runtime/step_stats_collector.h"
@@ -697,6 +698,19 @@ Status ExecutorImpl::Initialize(const Graph& graph) {
       string enter_name;
       TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &enter_name));
       EnsureFrameInfo(enter_name)->input_count++;
+    }
+
+    // Record information about whether each output of the op is used.
+    std::vector<bool> used_outputs(n->num_outputs(), false);
+    for (const Edge* e : n->out_edges()) {
+      if (e->src_output() >= 0) {
+        used_outputs[e->src_output()] = true;
+      }
+    }
+    for (bool used_output : used_outputs) {
+      if (!used_output) {
+        metrics::RecordUnusedOutput(n->type_string());
+      }
     }
   }
 
@@ -2532,7 +2546,7 @@ void ExecutorState::Finish() {
       }
     }
     delete this;
-    runner([=]() {
+    runner([step_id, status, done_cb = std::move(done_cb)]() {
       profiler::TraceMe traceme(
           [&] {
             return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
@@ -2548,10 +2562,10 @@ void ExecutorState::Finish() {
     // devices like GPUs that continue to execute Ops after their Compute
     // methods have completed, this ensures that control is not returned to
     // the user until the step (and its side-effects) has actually completed.
-    device->Sync([=](Status new_status) mutable {
-      status.Update(new_status);
+    device->Sync([this, step_id, runner = std::move(runner),
+                  done_cb = std::move(done_cb)](const Status& status) mutable {
       delete this;
-      runner([=]() {
+      runner([step_id, status, done_cb = std::move(done_cb)]() {
         profiler::TraceMe traceme(
             [&] {
               return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
@@ -2562,7 +2576,7 @@ void ExecutorState::Finish() {
     });
   } else {
     delete this;
-    runner([=]() {
+    runner([step_id, status, done_cb = std::move(done_cb)]() {
       profiler::TraceMe traceme(
           [&] {
             return absl::StrCat("ExecutorDoneCallback#id=", step_id, "#");
