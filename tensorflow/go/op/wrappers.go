@@ -17479,7 +17479,18 @@ func DequantizeAxis(value int64) DequantizeAttr {
 	}
 }
 
-// Dequantize the 'input' tensor into a float Tensor.
+// DequantizeDtype sets the optional dtype attribute to value.
+//
+// value: Type of the output tensor. Currently Dequantize supports float and bfloat16.
+// If 'dtype' is 'bfloat16', it only supports 'MIN_COMBINED' mode.
+// If not specified, defaults to DT_FLOAT
+func DequantizeDtype(value tf.DataType) DequantizeAttr {
+	return func(m optionalAttr) {
+		m["dtype"] = value
+	}
+}
+
+// Dequantize the 'input' tensor into a float or bfloat16 Tensor.
 //
 // [min_range, max_range] are scalar floats that specify the range for
 // the output. The 'mode' attribute controls exactly which calculations are
@@ -26899,6 +26910,13 @@ func StringToNumberOutType(value tf.DataType) StringToNumberAttr {
 //
 // (Note that int32 overflow results in an error while float overflow
 // results in a rounded value.)
+//
+// Example:
+//
+// >>> strings = ["5.0", "3.0", "7.0"]
+// >>> tf.strings.to_number(strings)
+// <tf.Tensor: shape=(3,), dtype=float32, numpy=array([5., 3., 7.], dtype=float32)>
+//
 //
 // Returns A Tensor of the same shape as the input `string_tensor`.
 func StringToNumber(scope *Scope, string_tensor tf.Output, optional ...StringToNumberAttr) (output tf.Output) {
