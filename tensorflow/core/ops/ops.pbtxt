@@ -5970,6 +5970,7 @@ op {
   input_arg {
     name: "feature_ids"
     type: DT_INT32
+    number_attr: "num_groups"
   }
   input_arg {
     name: "dimension_ids"
@@ -6029,6 +6030,15 @@ op {
     default_value {
       i: 1
     }
+  }
+  attr {
+    name: "num_groups"
+    type: "int"
+    default_value {
+      i: 1
+    }
+    has_minimum: true
+    minimum: 1
   }
   is_stateful: true
 }
@@ -51775,6 +51785,34 @@ op {
 }
 op {
   name: "Xdivy"
+  input_arg {
+    name: "x"
+    type_attr: "T"
+  }
+  input_arg {
+    name: "y"
+    type_attr: "T"
+  }
+  output_arg {
+    name: "z"
+    type_attr: "T"
+  }
+  attr {
+    name: "T"
+    type: "type"
+    allowed_values {
+      list {
+        type: DT_HALF
+        type: DT_FLOAT
+        type: DT_DOUBLE
+        type: DT_COMPLEX64
+        type: DT_COMPLEX128
+      }
+    }
+  }
+}
+op {
+  name: "Xlog1py"
   input_arg {
     name: "x"
     type_attr: "T"

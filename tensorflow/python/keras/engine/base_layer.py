@@ -55,6 +55,7 @@ from tensorflow.python.keras.mixed_precision.experimental import autocast_variab
 from tensorflow.python.keras.mixed_precision.experimental import policy
 from tensorflow.python.keras.saving.saved_model import layer_serialization
 from tensorflow.python.keras.utils import generic_utils
+from tensorflow.python.keras.utils import layer_utils
 from tensorflow.python.keras.utils import tf_utils
 # A module that only depends on `keras.layers` import these from here.
 from tensorflow.python.keras.utils.generic_utils import to_snake_case  # pylint: disable=unused-import
@@ -296,15 +297,14 @@ class Layer(module.Module):
         "non_trainable_variables" (e.g. BatchNorm mean and variance).
 
     Returns:
-      The tf.tracking.Trackable object.
+      The TrackableWeightHandler used to track this object.
     """
+    handler = base_layer_utils.TrackableWeightHandler(trackable_object)
     if trainable:
-      self._trainable_weights.append(
-          base_layer_utils.TrackableWeightHandler(trackable_object))
+      self._trainable_weights.append(handler)
     else:
-      self._non_trainable_weights.append(
-          base_layer_utils.TrackableWeightHandler(trackable_object))
-    return trackable_object
+      self._non_trainable_weights.append(handler)
+    return handler
 
   @doc_controls.for_subclass_implementers
   def add_weight(self,
@@ -554,10 +554,7 @@ class Layer(module.Module):
           inputs = nest.map_structure(
               base_layer_utils.generate_placeholders_from_shape, input_shape)
           try:
-            if self._expects_training_arg:
-              outputs = self(inputs, training=False)
-            else:
-              outputs = self(inputs)
+            outputs = self(inputs, training=False)
           except TypeError:
             raise NotImplementedError('We could not automatically infer '
                                       'the static shape of the layer\'s output.'
@@ -958,7 +955,11 @@ class Layer(module.Module):
       # eager training loop (either a custom one or the one used when
       # `run_eagerly=True`) and so we always return just the eager losses.
       if layer._eager_losses:
-        collected_losses.extend(layer._eager_losses)
+        # Filter placeholder losses that may have been added by revived layers.
+        # (see base_layer_utils for details).
+        if (layer._eager_losses[0] is
+            not base_layer_utils.REVIVED_LOSS_PLACEHOLDER):
+          collected_losses.extend(layer._eager_losses)
       else:
         collected_losses.extend(layer._losses)
       for regularizer in layer._callable_losses:
@@ -1678,7 +1679,7 @@ class Layer(module.Module):
                          ', but the layer isn\'t built. '
                          'You can build it manually via: `' + self.name +
                          '.build(batch_input_shape)`.')
-    return int(sum(np.prod(w.shape.as_list()) for w in self.weights))
+    return layer_utils.count_params(self.weights)
 
   @property
   def output_shape(self):
@@ -2562,6 +2563,7 @@ class TensorFlowOpLayer(Layer):
       effect on this class, however is used in `get_config`.
   """
 
+  @trackable.no_automatic_dependency_tracking
   def __init__(self,
                node_def,
                name,

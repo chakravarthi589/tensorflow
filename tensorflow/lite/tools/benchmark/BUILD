@@ -29,6 +29,7 @@ cc_binary(
         "//tensorflow:android": [
             "-pie",  # Android 5.0 and later supports only PIE
             "-lm",  # some builtin ops, e.g., tanh, need -lm
+            "-Wl,--rpath=/data/local/tmp/",  # Hexagon delegate libraries should be in /data/local/tmp
         ],
         "//conditions:default": [],
     }),
@@ -121,7 +122,7 @@ cc_library(
         ":logging",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
-        "@gemmlowp",
+        "//tensorflow/lite/experimental/ruy/profiler",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:string_util",
         "//tensorflow/lite/kernels:builtin_ops",
