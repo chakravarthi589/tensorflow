@@ -39,6 +39,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/tests/literal_test_util.h"
 #include "tensorflow/core/common_runtime/function.h"
+#include "tensorflow/core/common_runtime/graph_constructor.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/function.pb.h"
@@ -50,7 +51,6 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_testutil.h"
 #include "tensorflow/core/graph/algorithm.h"
 #include "tensorflow/core/graph/graph.h"
-#include "tensorflow/core/graph/graph_constructor.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/public/version.h"
@@ -365,7 +365,8 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForFastMemVar) {
   compile_options.return_updated_values_for_all_resources = true;
   TF_ASSERT_OK(compiler.CompileGraph(compile_options, "add", std::move(graph),
                                      args, &result));
-  EXPECT_EQ(fast_mem_arg_count, 1);
+  // Count 2: one for argument, one for the return value.
+  EXPECT_EQ(fast_mem_arg_count, 2);
 }
 
 // Tests that the compiler can correctly propagate the layout assigned by
@@ -417,6 +418,8 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForRetVal) {
   // Check that the return shapes are correctly tranposed.
   EXPECT_EQ(result.xla_output_shape,
             xla::ShapeUtil::MakeTupleShape({transposed, transposed}));
+  EXPECT_EQ(result.computation->GetProgramShape().ConsumeValueOrDie().result(),
+            xla::ShapeUtil::MakeTupleShape({transposed, transposed}));
 }
 
 // The layout of resource variable shouldn't change after transpose
@@ -458,6 +461,27 @@ TEST_F(XlaCompilerTest, TransposeVariables) {
   // Check that the return shapes are correctly tranposed.
   EXPECT_EQ(result.xla_output_shape,
             xla::ShapeUtil::MakeTupleShape({transposed, transposed}));
+}
+
+// Unranked fake param returns a 0 shaped tensor.
+TEST_F(XlaCompilerTest, UnrankedFakeParam) {
+  Scope scope = Scope::NewRootScope().ExitOnError();
+  PartialTensorShape shape;
+  auto a = ops::FakeParam(scope, DT_INT32, shape);
+  auto ret = ops::_Retval(scope.WithOpName("D"), a, 0);
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+  TF_ASSERT_OK(scope.ToGraph(graph.get()));
+
+  // Compiles the graph.
+  XlaCompiler compiler(DefaultOptions());
+
+  XlaCompiler::CompilationResult result;
+  TF_ASSERT_OK(compiler.CompileGraph(XlaCompiler::CompileOptions(), "compile",
+                                     std::move(graph), {}, &result));
+  // Check that the return shapes are correctly tranposed.
+  EXPECT_EQ(result.xla_output_shape,
+            xla::ShapeUtil::MakeTupleShape(
+                {xla::ShapeUtil::MakeShape(xla::S32, {0})}));
 }
 
 // Tests that the compiler doesn't reorder the parameters.
@@ -1091,6 +1115,8 @@ TEST_F(XlaCompilerTest, ResultLayoutSingle) {
   EXPECT_TRUE(xla::ShapeUtil::Equal(
       result.xla_output_shape,
       xla::ShapeUtil::MakeShapeWithLayout(xla::S32, {2, 3}, {0, 1})));
+  EXPECT_EQ(result.computation->GetProgramShape().ConsumeValueOrDie().result(),
+            result.xla_output_shape);
 }
 
 TEST_F(XlaCompilerTest, ResultLayoutMultiple) {
@@ -1131,6 +1157,8 @@ TEST_F(XlaCompilerTest, ResultLayoutMultiple) {
   EXPECT_TRUE(xla::ShapeUtil::Equal(
       result.xla_output_shape,
       xla::ShapeUtil::MakeTupleShape({result_shape, result_shape})));
+  EXPECT_EQ(result.computation->GetProgramShape().ConsumeValueOrDie().result(),
+            result.xla_output_shape);
 }
 
 // Tests a simple graph that reads and writes a variable.

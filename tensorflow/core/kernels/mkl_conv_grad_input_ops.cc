@@ -34,6 +34,7 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_slice.h"
 #include "tensorflow/core/framework/tensor_util.h"
 #include "tensorflow/core/kernels/conv_grad_ops.h"
+#include "tensorflow/core/kernels/conv_grad_shape_utils.h"
 #include "tensorflow/core/kernels/mkl_conv_ops.h"
 #include "tensorflow/core/kernels/ops_util.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -65,20 +66,32 @@ struct MklConvBwdInputParams {
   memory::dims dilations;
   memory::dims padding_left;
   memory::dims padding_right;
+#ifndef ENABLE_MKLDNN_V1
   padding_kind padding;
+#endif  // !ENABLE_MKLDNN_V1
 
   MklConvBwdInputParams(memory::dims diff_src_dims, memory::dims filter_dims,
                         memory::dims diff_dst_dims, memory::dims strides,
                         memory::dims dilations, memory::dims padding_left,
+#ifndef ENABLE_MKLDNN_V1
                         memory::dims padding_right, padding_kind padding)
+#else
+                        memory::dims padding_right)
+#endif  // !ENABLE_MKLDNN_V1
       : diff_src_dims(diff_src_dims),
         filter_dims(filter_dims),
         diff_dst_dims(diff_dst_dims),
         strides(strides),
         dilations(dilations),
         padding_left(padding_left),
+#ifndef ENABLE_MKLDNN_V1
         padding_right(padding_right),
-        padding(padding) {}
+        padding(padding) {
+  }
+#else
+        padding_right(padding_right) {
+  }
+#endif  // !ENABLE_MKLDNN_V1
 };
 
 template <typename T>
@@ -86,9 +99,7 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
  public:
   explicit MklConvBwdInputPrimitive(
       const MklConvBwdInputParams& convBwdInputDims)
-      : cpu_engine_(ENGINE_CPU, 0) {
-    context_.bwd_input_stream.reset(new CPU_STREAM(cpu_engine_));
-
+      : MklPrimitive(engine(ENGINE_CPU, 0)) {
     // Create conv bwd input primitive
     if (context_.conv_bwd_input == nullptr) {
       Setup(convBwdInputDims);
@@ -103,7 +114,8 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
   //   diff_dst_data: input data buffer for dst
   // Bias does not matter here
   void Execute(const T* diff_src_data, const T* filter_data,
-               const T* diff_dst_data) {
+               const T* diff_dst_data,
+               std::shared_ptr<stream> bwd_input_stream) {
     context_.diff_src_mem->set_data_handle(
         static_cast<T*>(const_cast<T*>(diff_src_data)));
     context_.filter_mem->set_data_handle(
@@ -112,10 +124,10 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
         static_cast<T*>(const_cast<T*>(diff_dst_data)));
 
 #ifdef ENABLE_MKLDNN_V1
-    execute_primitives(context_.bwd_input_primitives, context_.bwd_input_stream,
+    execute_primitives(context_.bwd_input_primitives, bwd_input_stream,
                        context_.bwd_input_primitives_args);
 #else
-    context_.bwd_input_stream->submit(context_.bwd_input_primitives);
+    bwd_input_stream->submit(context_.bwd_input_primitives);
 #endif  // ENABLE_MKLDNN_V1
 
     // Set data handle back to DummyData.
@@ -167,7 +179,6 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
     std::shared_ptr<memory::desc> diff_dst_md;
 
     // MKL-DNN pipeline for executing primitives.
-    std::shared_ptr<mkldnn::stream> bwd_input_stream;
     std::vector<mkldnn::primitive> bwd_input_primitives;
 
 #ifdef ENABLE_MKLDNN_V1
@@ -190,8 +201,7 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
           fwd_pd(nullptr),
           diff_src_md(nullptr),
           filter_md(nullptr),
-          diff_dst_md(nullptr),
-          bwd_input_stream(nullptr) {
+          diff_dst_md(nullptr) {
     }
   };
 
@@ -211,14 +221,22 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
         ALGORITHM::convolution_direct, *context_.diff_src_md,
         *context_.filter_md, *context_.diff_dst_md, convBwdInputDims.strides,
         convBwdInputDims.dilations, convBwdInputDims.padding_left,
+#ifndef ENABLE_MKLDNN_V1
         convBwdInputDims.padding_right, convBwdInputDims.padding));
+#else
+        convBwdInputDims.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
 
     context_.fwd_desc.reset(new ConvFwdDesc(
         prop_kind::forward, ALGORITHM::convolution_direct,
         *context_.diff_src_md, *context_.filter_md, *context_.diff_dst_md,
         convBwdInputDims.strides, convBwdInputDims.dilations,
+#ifndef ENABLE_MKLDNN_V1
         convBwdInputDims.padding_left, convBwdInputDims.padding_right,
         convBwdInputDims.padding));
+#else
+        convBwdInputDims.padding_left, convBwdInputDims.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
 
     // Create primitive descriptors for conv fwd and conv bwd input.
     context_.fwd_pd.reset(new ConvFwdPd(*context_.fwd_desc, cpu_engine_));
@@ -269,7 +287,6 @@ class MklConvBwdInputPrimitive : public MklPrimitive {
   }
 
   struct ConvBwdInputContext context_;
-  engine cpu_engine_;
 };
 
 template <typename T>
@@ -360,7 +377,15 @@ class MklConvCustomBackpropInputOp
       // tensor containing shape of filter. So filter.shape() is not
       // a correct way to get filter shape. These operator-specific calls
       // allow this class to handle this case.
-      TensorShape src_tf_shape = MakeInputTfShape(context, src_tensor);
+      TensorShape src_tf_shape;
+      if (src_tensor.dim_size(0) == 2) {
+        Conv2DBackpropComputeInputShape(src_tensor, filter_tensor.shape(),
+                                        diff_dst_tensor.shape(),
+                                        this->data_format_, &src_tf_shape);
+      } else {
+        src_tf_shape = MakeInputTfShape(context, src_tensor);
+      }
+
       TensorShape filter_tf_shape = MakeFilterTfShape(context, filter_tensor);
       TensorShape diff_dst_tf_shape =
           GetTfShape(context, kOutbpropIdx, eager_mode);
@@ -440,15 +465,18 @@ class MklConvCustomBackpropInputOp
       // The default dilation factor for each dimension is 1 in TF and
       // 0 in MKL-DNN.
       for (int i = 0; i < dilations.size(); ++i) --dilations[i];
-
       MklConvBwdInputParams convBwdInputDims(
           fwd_src_dims, fwd_filter_dims, diff_dst_dims, strides, dilations,
+#ifndef ENABLE_MKLDNN_V1
           padding_left, padding_right,
           TFPaddingToMklDnnPadding(this->padding_));
+#else
+          padding_left, padding_right);
+#endif  // !ENABLE_MKLDNN_V1
 
       // We don't cache those primitives if the environment variable
-      // TF_MKL_OPTIMIZE_PRIMITIVE_MEMUSE is true and if primitve descriptor
-      // includes potentialy large buffers. MKL-DNN allocates buffers
+      // TF_MKL_OPTIMIZE_PRIMITIVE_MEMUSE is true and if primitive descriptor
+      // includes potentially large buffers. MKL-DNN allocates buffers
       // in the following cases
       //   1. Legacy CPU without AVX512/AVX2, or
       //   2. 1x1 convolution with stride != 1
@@ -490,8 +518,10 @@ class MklConvCustomBackpropInputOp
       if (IS_FILTER_REORDER_NEEDED(fwd_filter_md, bwd_input_pd,
                                    conv_bwd_input)) {
         filter.SetUsrMem(fwd_filter_md, &filter_tensor);
-        filter.CheckReorderToOpMem(MEMORY_PD_WITHOUT_DATA(
-            bwd_input_pd.get()->PRIMITIVE_DESC_WEIGHTS, cpu_engine_));
+        filter.CheckReorderToOpMem(
+            MEMORY_PD_WITHOUT_DATA(bwd_input_pd.get()->PRIMITIVE_DESC_WEIGHTS,
+                                   cpu_engine_),
+            context);
         filter_data = static_cast<T*>(filter.GetOpMem().get_data_handle());
       } else {
         filter_data =
@@ -503,23 +533,29 @@ class MklConvCustomBackpropInputOp
       if (IS_DIFF_DST_REORDER_NEEDED(diff_dst_md, bwd_input_pd,
                                      conv_bwd_input)) {
         diff_dst.SetUsrMem(diff_dst_md, &diff_dst_tensor);
-        diff_dst.CheckReorderToOpMem(MEMORY_PD_WITHOUT_DATA(
-            bwd_input_pd.get()->PRIMITIVE_DESC_DIFF_DST, cpu_engine_));
+        diff_dst.CheckReorderToOpMem(
+            MEMORY_PD_WITHOUT_DATA(bwd_input_pd.get()->PRIMITIVE_DESC_DIFF_DST,
+                                   cpu_engine_),
+            context);
         diff_dst_data = static_cast<T*>(diff_dst.GetOpMem().get_data_handle());
       } else {
         diff_dst_data =
             static_cast<T*>(const_cast<T*>(diff_dst_tensor.flat<T>().data()));
       }
 
+      std::shared_ptr<stream> bwd_cpu_stream;
+      bwd_cpu_stream.reset(CreateStream(context, conv_bwd_input->GetEngine()));
       // Execute conv bwd input primitive.
       if (!eager_mode) {
-        conv_bwd_input->Execute(diff_src_data, filter_data, diff_dst_data);
+        conv_bwd_input->Execute(diff_src_data, filter_data, diff_dst_data,
+                                bwd_cpu_stream);
       } else {
         // In eager mode we first write the output to temporary
         // buffer in MKL format. Then we convert the data to TF format.
         T* tmp_data =
             static_cast<T*>(const_cast<T*>(tmp_tensor.flat<T>().data()));
-        conv_bwd_input->Execute(tmp_data, filter_data, diff_dst_data);
+        conv_bwd_input->Execute(tmp_data, filter_data, diff_dst_data,
+                                bwd_cpu_stream);
         auto output_tf_md = diff_src_mkl_shape.GetTfLayout();
 #ifndef ENABLE_MKLDNN_V1
         auto output_tf_pd = memory::primitive_desc(output_tf_md, cpu_engine_);
@@ -531,7 +567,7 @@ class MklConvCustomBackpropInputOp
         memory* dst_data_mem =
             new MEMORY_CONSTRUCTOR(OUTPUT_TF_MD, cpu_engine_, diff_src_data);
         CreateAndExecuteReorder(reorder_pd, *tmp_data_mem, *dst_data_mem,
-                                cpu_engine_);
+                                cpu_engine_, context);
       }
 
       // Delete primitive since it is not cached.

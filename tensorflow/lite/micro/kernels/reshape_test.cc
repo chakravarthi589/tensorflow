@@ -19,7 +19,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_utils.h"
 #include "tensorflow/lite/micro/test_helpers.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
@@ -45,7 +45,7 @@ void TestReshapeImpl(TfLiteTensor* input_tensor, TfLiteTensor* shape_tensor,
     constexpr int tensors_size = inputs_size + outputs_size;
     tensors[0] = *input_tensor;
     tensors[1] = *output_tensor,
-    PopulateContext(tensors, tensors_size, &context);
+    PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
     node.inputs = IntArrayFromInitializer({1, 0});
     node.outputs = IntArrayFromInitializer({1, 1});
   } else {
@@ -55,14 +55,14 @@ void TestReshapeImpl(TfLiteTensor* input_tensor, TfLiteTensor* shape_tensor,
     tensors[0] = *input_tensor;
     tensors[1] = *shape_tensor;
     tensors[2] = *output_tensor;
-    PopulateContext(tensors, tensors_size, &context);
+    PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
     node.inputs = IntArrayFromInitializer({2, 0, 1});
     node.outputs = IntArrayFromInitializer({1, 2});
   }
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RESHAPE, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RESHAPE);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   void* user_data = nullptr;
@@ -77,7 +77,13 @@ void TestReshapeImpl(TfLiteTensor* input_tensor, TfLiteTensor* shape_tensor,
   TF_LITE_MICRO_EXPECT_EQ(registration->free, nullptr);
 
   if (registration->prepare) {
-    TF_LITE_MICRO_EXPECT_EQ(kTfLiteOk, registration->prepare(&context, &node));
+    // Error can happen either in Prepare or eval stage.
+    auto status = registration->prepare(&context, &node);
+    if (status != kTfLiteOk && expect_failure) {
+      return;
+    } else {
+      TF_LITE_MICRO_EXPECT_EQ(kTfLiteOk, status);
+    }
   }
   if (expect_failure) {
     TF_LITE_MICRO_EXPECT_EQ(kTfLiteError,

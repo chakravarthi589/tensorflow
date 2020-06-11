@@ -25,11 +25,11 @@ namespace {
 using ::testing::ElementsAreArray;
 using ::testing::Matcher;
 
-template <typename RegularInputOuput>
+template <typename RegularInputOutput>
 class PadOpModel : public SingleOpModel {
  public:
-  void SetInput(std::initializer_list<RegularInputOuput> data) {
-    PopulateTensor<RegularInputOuput>(input_, data);
+  void SetInput(std::initializer_list<RegularInputOutput> data) {
+    PopulateTensor<RegularInputOutput>(input_, data);
   }
 
   template <typename QuantizedInputOutput>
@@ -46,8 +46,8 @@ class PadOpModel : public SingleOpModel {
     PopulateTensor<int>(paddings_, paddings);
   }
 
-  std::vector<RegularInputOuput> GetOutput() {
-    return ExtractVector<RegularInputOuput>(output_);
+  std::vector<RegularInputOutput> GetOutput() {
+    return ExtractVector<RegularInputOutput>(output_);
   }
   std::vector<int> GetOutputShape() { return GetTensorShape(output_); }
 
@@ -128,17 +128,17 @@ class PadOpConstModel : public PadOpModel<float> {
 };
 
 // Test case where paddings is a non-const tensor.
-template <typename RegularInputOuput>
-class PadV2OpDynamicModel : public PadOpModel<RegularInputOuput> {
+template <typename RegularInputOutput>
+class PadV2OpDynamicModel : public PadOpModel<RegularInputOutput> {
  public:
   PadV2OpDynamicModel(const TensorData& input,
                       std::initializer_list<int> paddings_shape,
-                      RegularInputOuput constant_values,
+                      RegularInputOutput constant_values,
                       const TensorData& output) {
     this->input_ = this->AddInput(input);
     this->paddings_ = this->AddInput(TensorType_INT32);
     this->constant_values_ = this->AddConstInput(
-        GetTensorType<RegularInputOuput>(), {constant_values}, {1});
+        GetTensorType<RegularInputOutput>(), {constant_values}, {1});
     this->output_ = this->AddOutput(output);
 
     this->SetBuiltinOp(BuiltinOperator_PADV2, BuiltinOptions_PadV2Options,
@@ -269,6 +269,16 @@ TEST(PadOpTest, SimpleDynamicTest) {
   EXPECT_THAT(m.GetOutput(), ElementsAreArray({0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4,
                                                0, 0, 0, 0, 0}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({1, 4, 4, 1}));
+}
+
+TEST(PadOpTest, DynamicUnequalDimensions) {
+  if (SingleOpModel::GetForceUseNnapi()) {
+    return;
+  }
+  PadOpDynamicModel m({TensorType_FLOAT32, {}}, {3, 2}, {TensorType_FLOAT32});
+  m.SetInput({1, 2, 3, 4});
+  m.SetPaddings({0, 0, 1, 1, 1, 1, 0, 0});
+  ASSERT_NE(m.InvokeUnchecked(), kTfLiteOk) << "Unequal dimensions.";
 }
 
 TEST(PadOpTest, AdvancedConstTest) {
@@ -526,6 +536,17 @@ TEST(PadV2OpTest, SimpleDynamicTest) {
   EXPECT_THAT(m.GetOutput(), ElementsAreArray({0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4,
                                                0, 0, 0, 0, 0}));
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({1, 4, 4, 1}));
+}
+
+TEST(PadV2OpTest, DynamicUnequalDimensions) {
+  if (SingleOpModel::GetForceUseNnapi()) {
+    return;
+  }
+  PadV2OpDynamicModel<float> m({TensorType_FLOAT32, {}}, {4, 2}, 0.0,
+                               {TensorType_FLOAT32});
+  m.SetInput({1, 2, 3, 4});
+  m.SetPaddings({0, 0, 1, 1, 1, 1, 0, 0});
+  ASSERT_NE(m.InvokeUnchecked(), kTfLiteOk) << "Unequal dimensions";
 }
 
 TEST(PadV2OpTest, SimpleDynamicValuedTest) {

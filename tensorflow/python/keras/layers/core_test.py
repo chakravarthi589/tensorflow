@@ -29,6 +29,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_spec
 from tensorflow.python.keras import keras_parameterized
 from tensorflow.python.keras import testing_utils
+from tensorflow.python.keras.layers import core
 from tensorflow.python.keras.mixed_precision.experimental import policy
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
@@ -274,6 +275,12 @@ class LambdaLayerTest(keras_parameterized.TestCase):
     expected_out = ragged_factory_ops.constant([[2.0], [3.0, 4.0]])
     self.assertAllClose(out, expected_out)
 
+  def test_lambda_deserialization_does_not_pollute_core(self):
+    layer = keras.layers.Lambda(lambda x: x + 1)
+    config = layer.get_config()
+    keras.layers.Lambda.from_config(config)
+    self.assertNotIn(self.__class__.__name__, dir(core))
+
 
 class TestStatefulLambda(keras_parameterized.TestCase):
 
@@ -296,8 +303,7 @@ class TestStatefulLambda(keras_parameterized.TestCase):
     model.compile(
         keras.optimizer_v2.gradient_descent.SGD(0.1),
         'mae',
-        run_eagerly=testing_utils.should_run_eagerly(),
-        experimental_run_tf_function=testing_utils.should_run_tf_function())
+        run_eagerly=testing_utils.should_run_eagerly())
     x, y = np.ones((10, 10), 'float32'), 2 * np.ones((10, 10), 'float32')
     model.fit(x, y, batch_size=2, epochs=2, validation_data=(x, y))
     self.assertLen(model.trainable_weights, 1)
@@ -430,6 +436,12 @@ class CoreLayersTest(keras_parameterized.TestCase):
         keras.layers.Reshape,
         kwargs={'target_shape': (-1, 1)},
         input_shape=(None, None, 2))
+
+  def test_reshape_set_static_shape(self):
+    input_layer = keras.Input(batch_shape=(1, None))
+    reshaped = keras.layers.Reshape((1, 100))(input_layer)
+    # Make sure the batch dim is not lost after array_ops.reshape.
+    self.assertEqual(reshaped.shape, [1, 1, 100])
 
   def test_permute(self):
     testing_utils.layer_test(

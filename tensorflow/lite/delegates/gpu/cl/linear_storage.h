@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "tensorflow/lite/delegates/gpu/cl/buffer.h"
+#include "tensorflow/lite/delegates/gpu/cl/gpu_object.h"
 #include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
 #include "tensorflow/lite/delegates/gpu/cl/tensor_type.h"
 #include "tensorflow/lite/delegates/gpu/cl/texture2d.h"
@@ -36,6 +37,34 @@ namespace cl {
 
 enum class LinearStorageType { BUFFER, TEXTURE_2D };
 
+struct TensorLinearDescriptor : public GPUObjectDescriptor {
+  LinearStorageType storage_type;
+  DataType element_type;  // FLOAT32 or FLOAT16
+
+  TensorLinearDescriptor() = default;
+  TensorLinearDescriptor(const TensorLinearDescriptor& desc)
+      : GPUObjectDescriptor(desc),
+        storage_type(desc.storage_type),
+        element_type(desc.element_type) {}
+  TensorLinearDescriptor& operator=(const TensorLinearDescriptor& desc) {
+    if (this != &desc) {
+      storage_type = desc.storage_type;
+      element_type = desc.element_type;
+      GPUObjectDescriptor::operator=(desc);
+    }
+    return *this;
+  }
+
+  absl::Status PerformSelector(const std::string& selector,
+                               const std::vector<std::string>& args,
+                               const std::vector<std::string>& template_args,
+                               std::string* result) const override;
+
+  GPUResources GetGPUResources(AccessType access_type) const override;
+  absl::Status PerformReadSelector(const std::vector<std::string>& args,
+                                   std::string* result) const;
+};
+
 struct LinearStorageCreateInfo {
   LinearStorageType storage_type;
   DataType data_type;
@@ -48,7 +77,7 @@ LinearStorageType DeduceLinearStorageType(
 
 // Represent GPU 1D-array of FLT4(float4/half4) values
 // Can use inside texture2d or buffer
-class LinearStorage {
+class LinearStorage : public GPUObject {
  public:
   LinearStorage() {}
 
@@ -63,13 +92,18 @@ class LinearStorage {
   std::string ReadLinearFLT4(const std::string& z_coord) const;
   std::string GetDeclaration() const;
 
+  const GPUObjectDescriptor* GetGPUDescriptor() const override {
+    return &desc_;
+  }
+  GPUResourcesWithValue GetGPUResources(AccessType access_type) const override;
+
  private:
-  friend Status CreateTextureLinearStorage(int size, DataType data_type,
-                                           void* data, CLContext* context,
-                                           LinearStorage* result);
-  friend Status CreateBufferLinearStorage(int size, DataType data_type,
-                                          void* data, CLContext* context,
-                                          LinearStorage* result);
+  friend absl::Status CreateTextureLinearStorage(int size, DataType data_type,
+                                                 void* data, CLContext* context,
+                                                 LinearStorage* result);
+  friend absl::Status CreateBufferLinearStorage(int size, DataType data_type,
+                                                void* data, CLContext* context,
+                                                LinearStorage* result);
 
   LinearStorage(int depth, LinearStorageType storage_type, DataType data_type);
 
@@ -81,25 +115,28 @@ class LinearStorage {
   std::string name_;
   LinearStorageType storage_type_;
   DataType data_type_;
+  TensorLinearDescriptor desc_;
 };
 
-Status CreateBufferLinearStorage(int size, DataType data_type, void* data,
-                                 CLContext* context, LinearStorage* result);
+absl::Status CreateBufferLinearStorage(int size, DataType data_type, void* data,
+                                       CLContext* context,
+                                       LinearStorage* result);
 
-Status CreateTextureLinearStorage(int size, DataType data_type, void* data,
-                                  CLContext* context, LinearStorage* result);
+absl::Status CreateTextureLinearStorage(int size, DataType data_type,
+                                        void* data, CLContext* context,
+                                        LinearStorage* result);
 
-Status CreateLinearStorage(const LinearStorageCreateInfo& creation_info,
-                           int size, void* data, CLContext* context,
-                           LinearStorage* result);
+absl::Status CreateLinearStorage(const LinearStorageCreateInfo& creation_info,
+                                 int size, void* data, CLContext* context,
+                                 LinearStorage* result);
 
 template <DataType T>
-Status CreateLinearStorage(const LinearStorageCreateInfo& creation_info,
-                           const ::tflite::gpu::Tensor<Linear, T>& tensor,
-                           CLContext* context, LinearStorage* result) {
+absl::Status CreateLinearStorage(const LinearStorageCreateInfo& creation_info,
+                                 const tflite::gpu::Tensor<Linear, T>& tensor,
+                                 CLContext* context, LinearStorage* result) {
   int size = creation_info.aligned_size != 0 ? creation_info.aligned_size
                                              : tensor.shape.v;
-  const int depth = IntegralDivideRoundUp(size, 4);
+  const int depth = DivideRoundUp(size, 4);
   if (creation_info.data_type == DataType::FLOAT32) {
     std::vector<float4> gpu_data(depth);
     CopyLinearFLT4(tensor, absl::MakeSpan(gpu_data));
@@ -112,7 +149,7 @@ Status CreateLinearStorage(const LinearStorageCreateInfo& creation_info,
                                         context, result));
   }
   result->SetName(creation_info.name);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace cl

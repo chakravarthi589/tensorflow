@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
 #include "tensorflow/lite/micro/testing/test_utils.h"
 
@@ -27,13 +27,13 @@ void ValidateArgMinMaxGoldens(TfLiteTensor* tensors, int tensors_size,
                               const int32_t* golden, int32_t* output,
                               int output_size, bool using_min) {
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration;
   if (using_min) {
-    registration = resolver.FindOp(tflite::BuiltinOperator_ARG_MIN, 1);
+    registration = resolver.FindOp(tflite::BuiltinOperator_ARG_MIN);
   } else {
-    registration = resolver.FindOp(tflite::BuiltinOperator_ARG_MAX, 1);
+    registration = resolver.FindOp(tflite::BuiltinOperator_ARG_MAX);
   }
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 

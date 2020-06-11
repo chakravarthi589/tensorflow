@@ -31,6 +31,7 @@ from tensorflow.python.distribute import distribution_strategy_context as ds_con
 from tensorflow.python.distribute import multi_worker_test_base
 from tensorflow.python.distribute import multi_worker_util
 from tensorflow.python.distribute import parameter_server_strategy
+from tensorflow.python.distribute import ps_values
 from tensorflow.python.distribute import reduce_util
 from tensorflow.python.distribute import strategy_test_lib
 from tensorflow.python.distribute import values
@@ -46,6 +47,7 @@ from tensorflow.python.keras.layers import core
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gradients
+from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import partitioned_variables
 from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import variable_scope
@@ -723,6 +725,46 @@ class ParameterServerStrategyTest(
     # Verify isolate_session_state
     self.assertTrue(new_config.isolate_session_state)
 
+  @combinations.generate(combinations.combine(mode=['graph', 'eager']))
+  def testInMultiWorkerMode(self):
+    strategy, _, _ = create_test_objects(
+        cluster_spec=self._cluster_spec,
+        task_type='worker',
+        task_id=1,
+        num_gpus=0)
+    self.assertTrue(strategy.extended._in_multi_worker_mode())
+
+  @combinations.generate(combinations.combine(mode=['eager']))
+  def testEagerCustomTrainingUnimplementedError(self):
+    cluster_spec = multi_worker_test_base.create_in_process_cluster(
+        num_workers=3, num_ps=2)
+    cluster_resolver = SimpleClusterResolver(
+        cluster_spec=multi_worker_util.normalize_cluster_spec(cluster_spec),
+        task_type='worker',
+        task_id=1,
+        num_accelerators={'GPU': 0})
+    strategy = parameter_server_strategy.ParameterServerStrategy(
+        cluster_resolver)
+    dataset = dataset_ops.DatasetV2.from_tensor_slices([5., 6., 7., 8.])
+
+    def train_step(data):
+      return math_ops.square(data)
+
+    self.assertRaisesRegex(NotImplementedError, 'ParameterServerStrategy*',
+                           strategy.experimental_distribute_dataset,
+                           dataset.batch(2))
+
+    self.assertRaisesRegex(
+        NotImplementedError, 'ParameterServerStrategy*',
+        strategy.experimental_distribute_datasets_from_function,
+        lambda _: dataset)
+
+    self.assertRaisesRegex(NotImplementedError, 'ParameterServerStrategy*',
+                           strategy.scope)
+
+    self.assertRaisesRegex(NotImplementedError, 'ParameterServerStrategy*',
+                           strategy.run, train_step)
+
 
 class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
                                            parameterized.TestCase):
@@ -755,8 +797,8 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
                        msg=('created_step %s type %s vs. get_step %s type %s' %
                             (id(created_step), created_step.__class__.__name__,
                              id(get_step), get_step.__class__.__name__)))
-      self.assertIs(values.AggregatingVariable, type(created_step))
-      self.assertIs(values.AggregatingVariable, type(get_step))
+      self.assertIs(ps_values.AggregatingVariable, type(created_step))
+      self.assertIs(ps_values.AggregatingVariable, type(get_step))
       self.assertIs(strategy, created_step.distribute_strategy)
 
   @combinations.generate(combinations.combine(mode=['graph']))
@@ -787,7 +829,7 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
           _ = v * v
         v, = tape.watched_variables()
         w = strategy.extended.value_container(v)
-        self.assertIs(values.AggregatingVariable, type(w))
+        self.assertIs(ps_values.AggregatingVariable, type(w))
 
       strategy.extended.call_for_each_replica(f)
 
@@ -800,6 +842,11 @@ class CentralStorageStrategyTest(strategy_test_lib.DistributionTestBase,
   def testNumpyDataset(self):
     strategy, _, _ = create_test_objects(num_gpus=2)
     self._test_numpy_dataset(strategy)
+
+  @combinations.generate(combinations.combine(mode=['graph', 'eager']))
+  def testInMultiWorkerMode(self):
+    strategy, _, _ = create_test_objects(num_gpus=0)
+    self.assertFalse(strategy.extended._in_multi_worker_mode())
 
 
 if __name__ == '__main__':

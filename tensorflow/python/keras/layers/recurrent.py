@@ -34,6 +34,7 @@ from tensorflow.python.keras import initializers
 from tensorflow.python.keras import regularizers
 from tensorflow.python.keras.engine.base_layer import Layer
 from tensorflow.python.keras.engine.input_spec import InputSpec
+from tensorflow.python.keras.saving.saved_model import layer_serialization
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.keras.utils import tf_utils
 from tensorflow.python.ops import array_ops
@@ -265,6 +266,12 @@ class RNN(Layer):
       RNN calculation. However, most TensorFlow data is batch-major, so by
       default this function accepts input and emits output in batch-major
       form.
+    zero_output_for_mask: Boolean (default `False`).
+      Whether the output should use zeros for the masked timesteps. Note that
+      this field is only used when `return_sequences` is True and mask is
+      provided. It can useful if you want to reuse the raw output sequence of
+      the RNN without interference from the masked timesteps, eg, merging
+      bidirectional RNNs.
 
   Call arguments:
     inputs: Input tensor.
@@ -431,7 +438,6 @@ class RNN(Layer):
     self._states = None
     self.constants_spec = None
     self._num_constants = 0
-    self._supports_ragged_inputs = True
 
     if stateful:
       if ds_context.has_strategy():
@@ -525,6 +531,7 @@ class RNN(Layer):
     # do the tensor_shape to shapes here. The input could be single tensor, or a
     # nested structure of tensors.
     def get_input_spec(shape):
+      """Convert input shape to InputSpec."""
       if isinstance(shape, tensor_shape.TensorShape):
         input_spec_shape = shape.as_list()
       else:
@@ -606,16 +613,17 @@ class RNN(Layer):
         '`cell.state_size`. Received `state_spec`={}; '
         'however `cell.state_size` is '
         '{}'.format(init_state_specs, cell_state_sizes))
-    flat_cell_state_size = nest.flatten(cell_state_sizes)
-    flat_state_spec = nest.flatten(init_state_specs)
+    flat_cell_state_sizes = nest.flatten(cell_state_sizes)
+    flat_state_specs = nest.flatten(init_state_specs)
 
-    if len(flat_cell_state_size) != len(flat_state_spec):
+    if len(flat_cell_state_sizes) != len(flat_state_specs):
       raise validation_error
-    for i in range(len(flat_cell_state_size)):
+    for cell_state_spec, cell_state_size in zip(flat_state_specs,
+                                                flat_cell_state_sizes):
       if not tensor_shape.TensorShape(
           # Ignore the first axis for init_state which is for batch
-          flat_state_spec[i].shape[1:]).is_compatible_with(
-              tensor_shape.TensorShape(flat_cell_state_size[i])):
+          cell_state_spec.shape[1:]).is_compatible_with(
+              tensor_shape.TensorShape(cell_state_size)):
         raise validation_error
 
   @doc_controls.do_not_doc_inheritable
@@ -685,10 +693,14 @@ class RNN(Layer):
     if is_keras_tensor:
       # Compute the full input spec, including state and constants
       full_input = [inputs] + additional_inputs
-      # The original input_spec is None since there could be a nested tensor
-      # input. Update the input_spec to match the inputs.
-      full_input_spec = generic_utils.to_list(
-          nest.map_structure(lambda _: None, inputs)) + additional_specs
+      if self.built:
+        # Keep the input_spec since it has been populated in build() method.
+        full_input_spec = self.input_spec + additional_specs
+      else:
+        # The original input_spec is None since there could be a nested tensor
+        # input. Update the input_spec to match the inputs.
+        full_input_spec = generic_utils.to_list(
+            nest.map_structure(lambda _: None, inputs)) + additional_specs
       # Perform the call with temporarily replaced input_spec
       self.input_spec = full_input_spec
       output = super(RNN, self).__call__(full_input, **kwargs)
@@ -779,7 +791,6 @@ class RNN(Layer):
         if not nest.is_sequence(new_states):
           new_states = [new_states]
         return output, new_states
-
     last_output, outputs, states = K.rnn(
         step,
         inputs,
@@ -793,9 +804,10 @@ class RNN(Layer):
         zero_output_for_mask=self.zero_output_for_mask)
 
     if self.stateful:
-      updates = []
-      for state_, state in zip(nest.flatten(self.states), nest.flatten(states)):
-        updates.append(state_ops.assign(state_, state))
+      updates = [
+          state_ops.assign(self_state, state) for self_state, state in zip(
+              nest.flatten(self.states), nest.flatten(states))
+      ]
       self.add_update(updates)
 
     if self.return_sequences:
@@ -972,6 +984,10 @@ class RNN(Layer):
     layer._num_constants = num_constants
     return layer
 
+  @property
+  def _trackable_saved_model_saver(self):
+    return layer_serialization.RNNSavedModelSaver(self)
+
 
 @keras_export('keras.layers.AbstractRNNCell')
 class AbstractRNNCell(Layer):
@@ -1080,19 +1096,30 @@ class DropoutRNNCellMixin(object):
   """
 
   def __init__(self, *args, **kwargs):
-    # Note that the following two masks will be used in "graph function" mode,
-    # e.g. these masks are symbolic tensors. In eager mode, the `eager_*_mask`
-    # tensors will be generated differently than in the "graph function" case,
-    # and they will be cached.
-    # Also note that in graph mode, we still cache those masks only because the
-    # RNN could be created with `unroll=True`. In that case, the `cell.call()`
-    # function will be invoked multiple times, and we want to ensure same mask
-    # is used every time.
-    self._dropout_mask = None
-    self._recurrent_dropout_mask = None
-    self._eager_dropout_mask = None
-    self._eager_recurrent_dropout_mask = None
+    self._create_non_trackable_mask_cache()
     super(DropoutRNNCellMixin, self).__init__(*args, **kwargs)
+
+  @trackable.no_automatic_dependency_tracking
+  def _create_non_trackable_mask_cache(self):
+    """Create the cache for dropout and recurrent dropout mask.
+
+    Note that the following two masks will be used in "graph function" mode,
+    e.g. these masks are symbolic tensors. In eager mode, the `eager_*_mask`
+    tensors will be generated differently than in the "graph function" case,
+    and they will be cached.
+
+    Also note that in graph mode, we still cache those masks only because the
+    RNN could be created with `unroll=True`. In that case, the `cell.call()`
+    function will be invoked multiple times, and we want to ensure same mask
+    is used every time.
+
+    Also the caches are created without tracking. Since they are not picklable
+    by python when deepcopy, we don't want layer._obj_reference_counts_dict
+    to track it by default.
+    """
+    self._dropout_mask_cache = K.ContextValueCache(self._create_dropout_mask)
+    self._recurrent_dropout_mask_cache = K.ContextValueCache(
+        self._create_recurrent_dropout_mask)
 
   def reset_dropout_mask(self):
     """Reset the cached dropout masks if any.
@@ -1103,8 +1130,7 @@ class DropoutRNNCellMixin(object):
     be cached between batches. Otherwise it will introduce unreasonable bias
     against certain index of data within the batch.
     """
-    self._dropout_mask = None
-    self._eager_dropout_mask = None
+    self._dropout_mask_cache.clear()
 
   def reset_recurrent_dropout_mask(self):
     """Reset the cached recurrent dropout masks if any.
@@ -1115,8 +1141,21 @@ class DropoutRNNCellMixin(object):
     be cached between batches. Otherwise it will introduce unreasonable bias
     against certain index of data within the batch.
     """
-    self._recurrent_dropout_mask = None
-    self._eager_recurrent_dropout_mask = None
+    self._recurrent_dropout_mask_cache.clear()
+
+  def _create_dropout_mask(self, inputs, training, count=1):
+    return _generate_dropout_mask(
+        array_ops.ones_like(inputs),
+        self.dropout,
+        training=training,
+        count=count)
+
+  def _create_recurrent_dropout_mask(self, inputs, training, count=1):
+    return _generate_dropout_mask(
+        array_ops.ones_like(inputs),
+        self.recurrent_dropout,
+        training=training,
+        count=count)
 
   def get_dropout_mask_for_cell(self, inputs, training, count=1):
     """Get the dropout mask for RNN cell's input.
@@ -1136,23 +1175,8 @@ class DropoutRNNCellMixin(object):
     """
     if self.dropout == 0:
       return None
-    if (not context.executing_eagerly() and self._dropout_mask is None
-        or context.executing_eagerly() and self._eager_dropout_mask is None):
-      # Generate new mask and cache it based on context.
-      dp_mask = _generate_dropout_mask(
-          array_ops.ones_like(inputs),
-          self.dropout,
-          training=training,
-          count=count)
-      if context.executing_eagerly():
-        self._eager_dropout_mask = dp_mask
-      else:
-        self._dropout_mask = dp_mask
-    else:
-      # Reuse the existing mask.
-      dp_mask = (self._eager_dropout_mask
-                 if context.executing_eagerly() else self._dropout_mask)
-    return dp_mask
+    init_kwargs = dict(inputs=inputs, training=training, count=count)
+    return self._dropout_mask_cache.setdefault(kwargs=init_kwargs)
 
   def get_recurrent_dropout_mask_for_cell(self, inputs, training, count=1):
     """Get the recurrent dropout mask for RNN cell.
@@ -1172,25 +1196,23 @@ class DropoutRNNCellMixin(object):
     """
     if self.recurrent_dropout == 0:
       return None
-    if (not context.executing_eagerly() and self._recurrent_dropout_mask is None
-        or context.executing_eagerly()
-        and self._eager_recurrent_dropout_mask is None):
-      # Generate new mask and cache it based on context.
-      rec_dp_mask = _generate_dropout_mask(
-          array_ops.ones_like(inputs),
-          self.recurrent_dropout,
-          training=training,
-          count=count)
-      if context.executing_eagerly():
-        self._eager_recurrent_dropout_mask = rec_dp_mask
-      else:
-        self._recurrent_dropout_mask = rec_dp_mask
-    else:
-      # Reuse the existing mask.
-      rec_dp_mask = (self._eager_recurrent_dropout_mask
-                     if context.executing_eagerly()
-                     else self._recurrent_dropout_mask)
-    return rec_dp_mask
+    init_kwargs = dict(inputs=inputs, training=training, count=count)
+    return self._recurrent_dropout_mask_cache.setdefault(kwargs=init_kwargs)
+
+  def __getstate__(self):
+    # Used for deepcopy. The caching can't be pickled by python, since it will
+    # contain tensor and graph.
+    state = super(DropoutRNNCellMixin, self).__getstate__()
+    state.pop('_dropout_mask_cache', None)
+    state.pop('_recurrent_dropout_mask_cache', None)
+    return state
+
+  def __setstate__(self, state):
+    state['_dropout_mask_cache'] = K.ContextValueCache(
+        self._create_dropout_mask)
+    state['_recurrent_dropout_mask_cache'] = K.ContextValueCache(
+        self._create_recurrent_dropout_mask)
+    super(DropoutRNNCellMixin, self).__setstate__(state)
 
 
 @keras_export('keras.layers.SimpleRNNCell')
@@ -1353,7 +1375,8 @@ class SimpleRNNCell(DropoutRNNCellMixin, Layer):
     if self.activation is not None:
       output = self.activation(output)
 
-    return output, [output]
+    new_state = [output] if nest.is_sequence(states) else output
+    return output, new_state
 
   def get_initial_state(self, inputs=None, batch_size=None, dtype=None):
     return _generate_zero_filled_state_for_cell(self, inputs, batch_size, dtype)
@@ -1892,7 +1915,8 @@ class GRUCell(DropoutRNNCellMixin, Layer):
       hh = self.activation(x_h + recurrent_h)
     # previous and candidate state mixed by update gate
     h = z * h_tm1 + (1 - z) * hh
-    return h, [h]
+    new_state = [h] if nest.is_sequence(states) else h
+    return h, new_state
 
   def get_config(self):
     config = {
@@ -2235,8 +2259,8 @@ class LSTMCell(DropoutRNNCellMixin, Layer):
     unit_forget_bias: Boolean.
       If True, add 1 to the bias of the forget gate at initialization.
       Setting it to true will also force `bias_initializer="zeros"`.
-      This is recommended in [Jozefowicz et
-        al.](http://www.jmlr.org/proceedings/papers/v37/jozefowicz15.pdf)
+      This is recommended in [Jozefowicz et al., 2015](
+        http://www.jmlr.org/proceedings/papers/v37/jozefowicz15.pdf)
     kernel_regularizer: Regularizer function applied to
       the `kernel` weights matrix.
     recurrent_regularizer: Regularizer function applied to
@@ -2352,7 +2376,7 @@ class LSTMCell(DropoutRNNCellMixin, Layer):
         def bias_initializer(_, *args, **kwargs):
           return K.concatenate([
               self.bias_initializer((self.units,), *args, **kwargs),
-              initializers.Ones()((self.units,), *args, **kwargs),
+              initializers.get('ones')((self.units,), *args, **kwargs),
               self.bias_initializer((self.units * 2,), *args, **kwargs),
           ])
       else:
@@ -2505,7 +2529,8 @@ class PeepholeLSTMCell(LSTMCell):
   well as the previous hidden state (which is what LSTMCell is limited to).
   This allows PeepholeLSTMCell to better learn precise timings over LSTMCell.
 
-  From [Gers et al.](http://www.jmlr.org/papers/volume3/gers02a/gers02a.pdf):
+  From [Gers et al., 2002](
+    http://www.jmlr.org/papers/volume3/gers02a/gers02a.pdf):
 
   "We find that LSTM augmented by 'peephole connections' from its internal
   cells to its multiplicative gates can learn the fine distinction between
@@ -2514,9 +2539,7 @@ class PeepholeLSTMCell(LSTMCell):
 
   The peephole implementation is based on:
 
-  [Long short-term memory recurrent neural network architectures for
-   large scale acoustic modeling.
-  ](https://research.google.com/pubs/archive/43905.pdf)
+  [Sak et al., 2014](https://research.google.com/pubs/archive/43905.pdf)
 
   Example:
 
@@ -2603,8 +2626,8 @@ class LSTM(RNN):
     unit_forget_bias: Boolean.
       If True, add 1 to the bias of the forget gate at initialization.
       Setting it to true will also force `bias_initializer="zeros"`.
-      This is recommended in [Jozefowicz et
-        al.](http://www.jmlr.org/proceedings/papers/v37/jozefowicz15.pdf).
+      This is recommended in [Jozefowicz et al., 2015](
+        http://www.jmlr.org/proceedings/papers/v37/jozefowicz15.pdf).
     kernel_regularizer: Regularizer function applied to
       the `kernel` weights matrix.
     recurrent_regularizer: Regularizer function applied to

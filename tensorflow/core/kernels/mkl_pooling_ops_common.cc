@@ -22,8 +22,7 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/framework/bounds_check.h"
-#include "tensorflow/core/framework/common_shape_fns.h"
-
+#include "tensorflow/core/framework/kernel_shape_util.h"
 namespace tensorflow {
 using mkldnn::prop_kind;
 
@@ -38,11 +37,12 @@ void MklPoolingFwdPrimitive<T>::Setup(const MklPoolingParams& fwdParams) {
   context_.alg_kind = fwdParams.alg_kind;
   context_.prop_kind = fwdParams.prop_kind;
 
-  // Create memory descriptor
-  // FIXME: Pooling doesn't expose to get the src_primitive_desc,
-  //        so src format is currently hard-coded.
-  //        A utility function is used to do this,
-  //        which may be broken with future CPU architectures
+// Create memory descriptor
+// FIXME: Pooling doesn't expose to get the src_primitive_desc,
+//        so src format is currently hard-coded.
+//        A utility function is used to do this,
+//        which may be broken with future CPU architectures
+#ifndef ENABLE_MKLDNN_V1
   bool is_2d = (fwdParams.src_dims.size() == 4);
   if (std::is_same<T, qint8>::value || std::is_same<T, quint8>::value)
     context_.src_fmt = is_2d ? MEMORY_FORMAT::nhwc : MEMORY_FORMAT::ndhwc;
@@ -51,20 +51,31 @@ void MklPoolingFwdPrimitive<T>::Setup(const MklPoolingParams& fwdParams) {
 
   context_.src_md.reset(new memory::desc({fwdParams.src_dims}, MklDnnType<T>(),
                                          context_.src_fmt));
+#else
+  context_.src_md.reset(new memory::desc(fwdParams.src_md.data));
+#endif  //  !ENABLE_MKLDNN_V1
   context_.dst_md.reset(new memory::desc({fwdParams.dst_dims}, MklDnnType<T>(),
                                          MEMORY_FORMAT::any));
 
+#ifndef ENABLE_MKLDNN_V1
   // Create a pooling descriptor.
   context_.fwd_desc.reset(new pooling_forward::desc(
       fwdParams.prop_kind, fwdParams.alg_kind, *context_.src_md,
       *context_.dst_md, fwdParams.strides, fwdParams.filter_dims,
       fwdParams.padding_left, fwdParams.padding_right, padding_kind::zero));
+#else
+  context_.fwd_desc.reset(new pooling_forward::desc(
+      fwdParams.prop_kind, fwdParams.alg_kind, *context_.src_md,
+      *context_.dst_md, fwdParams.strides, fwdParams.filter_dims,
+      fwdParams.padding_left, fwdParams.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
   context_.fwd_pd.reset(
       new pooling_forward::primitive_desc(*context_.fwd_desc, cpu_engine_));
-
 #ifndef ENABLE_MKLDNN_V1
   context_.dst_fmt = static_cast<MEMORY_FORMAT>(
       context_.fwd_pd.get()->PRIMITIVE_DESC_DST.desc().data.format);
+#else
+  context_.dst_fmt = static_cast<MEMORY_FORMAT>(MEMORY_FORMAT::any);
 #endif  // ENABLE_MKLDNN_V1
 
   // Create MKL-DNN internal memory object with dummy data.
@@ -72,7 +83,6 @@ void MklPoolingFwdPrimitive<T>::Setup(const MklPoolingParams& fwdParams) {
       context_.fwd_pd.get()->PRIMITIVE_DESC_SRC, cpu_engine_, DummyData));
   context_.dst_mem.reset(new MEMORY_CONSTRUCTOR(
       context_.fwd_pd.get()->PRIMITIVE_DESC_DST, cpu_engine_, DummyData));
-
   // For max pooling, need to return workspace (ws) for backward computing.
   if (fwdParams.alg_kind == ALGORITHM::pooling_max &&
       fwdParams.prop_kind == prop_kind::forward_training) {
@@ -115,7 +125,8 @@ void MklPoolingFwdPrimitive<T>::Setup(const MklPoolingParams& fwdParams) {
 
 template <typename T>
 void MklPoolingFwdPrimitive<T>::Execute(const T* src_data, T* dst_data,
-                                        void* ws_data) {
+                                        void* ws_data,
+                                        std::shared_ptr<stream> fwd_stream) {
   context_.src_mem->set_data_handle(
       static_cast<void*>(const_cast<T*>(src_data)));
   context_.dst_mem->set_data_handle(static_cast<void*>(dst_data));
@@ -127,10 +138,9 @@ void MklPoolingFwdPrimitive<T>::Execute(const T* src_data, T* dst_data,
   }
 
 #ifdef ENABLE_MKLDNN_V1
-  execute_primitives(context_.fwd_primitives, context_.fwd_stream,
-                     context_.net_args);
+  execute_primitives(context_.fwd_primitives, fwd_stream, context_.net_args);
 #else
-  context_.fwd_stream->submit(context_.fwd_primitives);
+  fwd_stream->submit(context_.fwd_primitives);
 #endif  // ENABLE_MKLDNN_V1
 
   // Set back data handle.
@@ -160,10 +170,15 @@ void MklPoolingBwdPrimitive<T>::Setup(const MklPoolingParams& bwdParams) {
 
   // Create memory descriptor.
   context_.diff_src_md.reset(new memory::desc(
-      {bwdParams.src_dims}, MklDnnType<T>(), memory::format::any));
+      {bwdParams.src_dims}, MklDnnType<T>(), MEMORY_FORMAT::any));
+#ifndef ENABLE_MKLDNN_V1
   context_.diff_dst_md.reset(new memory::desc(
       {bwdParams.dst_dims}, MklDnnType<T>(), bwdParams.src_format));
+#else
+  context_.diff_dst_md.reset(new memory::desc(bwdParams.diff_dst_md.data));
+#endif  // !ENABLE_MKLDNN_V1
 
+#ifndef ENABLE_MKLDNN_V1
   context_.bwd_desc.reset(new pooling_backward::desc(
       bwdParams.alg_kind, *context_.diff_src_md, *context_.diff_dst_md,
       bwdParams.strides, bwdParams.filter_dims, bwdParams.padding_left,
@@ -175,6 +190,18 @@ void MklPoolingBwdPrimitive<T>::Setup(const MklPoolingParams& bwdParams) {
       bwdParams.prop_kind, bwdParams.alg_kind, *context_.diff_src_md,
       *context_.diff_dst_md, bwdParams.strides, bwdParams.filter_dims,
       bwdParams.padding_left, bwdParams.padding_right, padding_kind::zero));
+#else
+  context_.bwd_desc.reset(new pooling_backward::desc(
+      bwdParams.alg_kind, *context_.diff_src_md, *context_.diff_dst_md,
+      bwdParams.strides, bwdParams.filter_dims, bwdParams.padding_left,
+      bwdParams.padding_right));
+  // Create a forward primitive,
+  // which will be used as a hint for creating backward primitive.
+  context_.fwd_desc.reset(new pooling_forward::desc(
+      bwdParams.prop_kind, bwdParams.alg_kind, *context_.diff_src_md,
+      *context_.diff_dst_md, bwdParams.strides, bwdParams.filter_dims,
+      bwdParams.padding_left, bwdParams.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
   context_.fwd_pd.reset(
       new pooling_forward::primitive_desc(*context_.fwd_desc, cpu_engine_));
   context_.bwd_pd.reset(new pooling_backward::primitive_desc(
@@ -240,7 +267,8 @@ void MklPoolingBwdPrimitive<T>::Setup(const MklPoolingParams& bwdParams) {
 
 template <typename T>
 void MklPoolingBwdPrimitive<T>::Execute(const T* diff_dst_data,
-                                        T* diff_src_data, const void* ws_data) {
+                                        T* diff_src_data, const void* ws_data,
+                                        std::shared_ptr<stream> bwd_stream) {
   context_.diff_dst_mem->set_data_handle(
       static_cast<void*>(const_cast<T*>(diff_dst_data)));
   context_.diff_src_mem->set_data_handle(static_cast<void*>(diff_src_data));
@@ -250,10 +278,9 @@ void MklPoolingBwdPrimitive<T>::Execute(const T* diff_dst_data,
   }
 
 #ifdef ENABLE_MKLDNN_V1
-  execute_primitives(context_.bwd_primitives, context_.bwd_stream,
-                     context_.net_args);
+  execute_primitives(context_.bwd_primitives, bwd_stream, context_.net_args);
 #else
-  context_.bwd_stream->submit(context_.bwd_primitives);
+  bwd_stream->submit(context_.bwd_primitives);
 #endif  // ENABLE_MKLDNN_V1
 
   // Set back data handle.

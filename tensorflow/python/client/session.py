@@ -862,7 +862,7 @@ class BaseSession(SessionInterface):
     * A `tf.Tensor`.
       The corresponding fetched value will be a numpy ndarray containing the
       value of that tensor.
-    * A `tf.SparseTensor`.
+    * A `tf.sparse.SparseTensor`.
       The corresponding fetched value will be a
       `tf.compat.v1.SparseTensorValue`
       containing the value of that sparse tensor.
@@ -907,7 +907,7 @@ class BaseSession(SessionInterface):
       `tf.compat.v1.placeholder`, the shape of
       the value will be checked for compatibility with the placeholder.
     * If the key is a
-      `tf.SparseTensor`,
+      `tf.sparse.SparseTensor`,
       the value should be a
       `tf.compat.v1.SparseTensorValue`.
     * If the key is a nested tuple of `Tensor`s or `SparseTensor`s, the value
@@ -1514,6 +1514,7 @@ class Session(BaseSession):
   example:
 
   ```python
+  tf.compat.v1.disable_eager_execution() # need to disable eager in TF2.x
   # Build a graph.
   a = tf.constant(5.0)
   b = tf.constant(6.0)
@@ -1523,7 +1524,7 @@ class Session(BaseSession):
   sess = tf.compat.v1.Session()
 
   # Evaluate the tensor `c`.
-  print(sess.run(c))
+  print(sess.run(c)) # prints 30.0
   ```
 
   A session may own resources, such as

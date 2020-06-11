@@ -67,6 +67,19 @@ require writing JNI wrappers to move data between Java and C++ layers.
 See below for details about using C++ and Java, or
 follow the [Android quickstart](android.md) for a tutorial and example code.
 
+#### TensorFlow Lite Android wrapper code generator
+
+Note: TensorFlow Lite wrapper code generator is in experimental (beta) phase and
+it currently only supports Android.
+
+For TensorFlow Lite model enhanced with [metadata](../convert/metadata.md),
+developers can use the TensorFlow Lite Android wrapper code generator to create
+platform specific wrapper code. The wrapper code removes the need to interact
+directly with `ByteBuffer` on Android. Instead, developers can interact with the
+TensorFlow Lite model with typed objects such as `Bitmap` and `Rect`. For more
+information, please refer to the
+[TensorFlow Lite Android wrapper code generator](codegen.md).
+
 ### iOS
 
 On iOS, TensorFlow Lite is available with native iOS libraries written in
@@ -297,7 +310,7 @@ The following example shows how to use the Python interpreter to load a
 import numpy as np
 import tensorflow as tf
 
-# Load TFLite model and allocate tensors.
+# Load the TFLite model and allocate tensors.
 interpreter = tf.lite.Interpreter(model_path="converted_model.tflite")
 interpreter.allocate_tensors()
 
@@ -305,7 +318,7 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-# Test model on random input data.
+# Test the model on random input data.
 input_shape = input_details[0]['shape']
 input_data = np.array(np.random.random_sample(input_shape), dtype=np.float32)
 interpreter.set_tensor(input_details[0]['index'], input_data)
@@ -318,10 +331,11 @@ output_data = interpreter.get_tensor(output_details[0]['index'])
 print(output_data)
 ```
 
-Alternative to loading the model as a pre-converted `.tflite` file, you can
-combine your code with the [TensorFlow Lite Converter Python API](
-../convert/python_api.md) (`tf.lite.TFLiteConverter`), allowing you to convert
-your TensorFlow model into the TensorFlow Lite format and then run an inference:
+Alternatively to loading the model as a pre-converted `.tflite` file, you can
+combine your code with the
+[TensorFlow Lite Converter Python API](../convert/python_api.md)
+(`tf.lite.TFLiteConverter`), allowing you to convert your TensorFlow model into
+the TensorFlow Lite format and then run an inference:
 
 ```python
 import numpy as np
@@ -337,7 +351,7 @@ with tf.Session() as sess:
   converter = tf.lite.TFLiteConverter.from_session(sess, [img], [out])
   tflite_model = converter.convert()
 
-# Load TFLite model and allocate tensors.
+# Load the TFLite model and allocate tensors.
 interpreter = tf.lite.Interpreter(model_content=tflite_model)
 interpreter.allocate_tensors()
 
@@ -371,22 +385,22 @@ including all the tensors. The latter allows implementations to access their
 inputs and outputs.
 
 When the interpreter loads a model, it calls `init()` once for each node in the
-graph. A given `init()` will be called more than once if the op is used
-multiple times in the graph. For custom ops a configuration buffer will be
-provided, containing a flexbuffer that maps parameter names to their values.
-The buffer is empty for builtin ops because the interpreter has already parsed
-the op parameters. Kernel implementation that require state should initialize
-it here and transfer ownership to the caller.  For each `init()` call, there
-will be a corresponding call to `free()`, allowing implementations to dispose
-of the buffer they might have allocated in `init()`.
+graph. A given `init()` will be called more than once if the op is used multiple
+times in the graph. For custom ops a configuration buffer will be provided,
+containing a flexbuffer that maps parameter names to their values. The buffer is
+empty for builtin ops because the interpreter has already parsed the op
+parameters. Kernel implementations that require state should initialize it here
+and transfer ownership to the caller. For each `init()` call, there will be a
+corresponding call to `free()`, allowing implementations to dispose of the
+buffer they might have allocated in `init()`.
 
-Whenever the input tensors are resized the interpreter will go through the
+Whenever the input tensors are resized, the interpreter will go through the
 graph notifying implementations of the change. This gives them the chance to
 resize their internal buffer, check validity of input shapes and types, and
-recalculate output shapes. This is all done through `prepare()` and
-implementation can access their state using `node->user_data`.
+recalculate output shapes. This is all done through `prepare()`, and
+implementations can access their state using `node->user_data`.
 
-Finally, each time inference runs the interpreter traverses the graph calling
+Finally, each time inference runs, the interpreter traverses the graph calling
 `invoke()`, and here too the state is available as `node->user_data`.
 
 Custom ops can be implemented in exactly the same way as builtin ops, by

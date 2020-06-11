@@ -1,6 +1,6 @@
 # Tensorflow default + linux implementations of tensorflow/core/platform libraries.
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
-load("//tensorflow:tensorflow.bzl", "tf_copts")
+load("//tensorflow:tensorflow.bzl", "if_not_windows", "tf_copts")
 load(
     "//tensorflow/core/platform:rules_cc.bzl",
     "cc_library",
@@ -87,6 +87,7 @@ cc_library(
         "//tensorflow/core/platform:env.h",
         "//tensorflow/core/platform:file_system.h",
         "//tensorflow/core/platform:file_system_helper.h",
+        "//tensorflow/core/platform:ram_file_system.h",
         "//tensorflow/core/platform:threadpool.h",
     ],
     tags = [
@@ -193,15 +194,13 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "monitoring",
-    srcs = ["monitoring.cc"],
-    hdrs = ["//tensorflow/core/platform:monitoring.h"],
-    tags = [
-        "manual",
-        "no_oss",
-        "nobuilder",
-    ],
+filegroup(
+    name = "xla_cpu_runtime_srcs",
+    srcs = [
+        "cord.h",
+        "dynamic_annotations.h",
+        "integral_types.h",
+    ] + if_not_windows(["env_time.cc"]),
 )
 
 cc_library(
@@ -326,6 +325,7 @@ cc_library(
     ],
     deps = [
         "//tensorflow/core/platform:logging",
+        "//tensorflow/core/platform:path",
         "@bazel_tools//tools/cpp/runfiles",
     ],
 )
@@ -365,6 +365,7 @@ cc_library(
         "//tensorflow/core/platform",
         "//tensorflow/core/platform:stacktrace",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
@@ -508,6 +509,7 @@ filegroup(
 filegroup(
     name = "mobile_srcs_no_runtime",
     srcs = [
+        "casts.h",
         "context.h",
         "dynamic_annotations.h",
         "env.cc",
@@ -528,7 +530,6 @@ filegroup(
     srcs = [
         "casts.h",
         "cord.h",
-        "monitoring.cc",
         "mutex.h",
         "mutex_data.h",
         "notification.h",

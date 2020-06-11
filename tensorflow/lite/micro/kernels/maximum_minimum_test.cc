@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
 #include "tensorflow/lite/micro/testing/test_utils.h"
 
@@ -46,10 +46,10 @@ void TestMaxMinFloat(tflite::BuiltinOperator op,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
-  const TfLiteRegistration* registration = resolver.FindOp(op, 1);
+  ::tflite::AllOpsResolver resolver;
+  const TfLiteRegistration* registration = resolver.FindOp(op);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   TfLiteIntArray* inputs_array = IntArrayFromInitializer({2, 0, 1});
@@ -105,10 +105,10 @@ void TestMaxMinQuantized(
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
-  const TfLiteRegistration* registration = resolver.FindOp(op, 1);
+  ::tflite::AllOpsResolver resolver;
+  const TfLiteRegistration* registration = resolver.FindOp(op);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   TfLiteIntArray* inputs_array = IntArrayFromInitializer({2, 0, 1});
@@ -162,10 +162,10 @@ void TestMaxMinQuantizedInt32(
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
-  const TfLiteRegistration* registration = resolver.FindOp(op, 1);
+  ::tflite::AllOpsResolver resolver;
+  const TfLiteRegistration* registration = resolver.FindOp(op);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   TfLiteIntArray* inputs_array = IntArrayFromInitializer({2, 0, 1});

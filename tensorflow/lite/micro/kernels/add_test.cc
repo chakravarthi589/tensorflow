@@ -17,7 +17,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
 #include "tensorflow/lite/micro/testing/test_utils.h"
 
@@ -67,11 +67,11 @@ void ValidateAddGoldens(TfLiteTensor* tensors, int tensors_size,
                         TfLiteFusedActivation activation,
                         float tolerance = 1e-5) {
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(::tflite::BuiltinOperator_ADD, 1);
+      resolver.FindOp(::tflite::BuiltinOperator_ADD);
 
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 

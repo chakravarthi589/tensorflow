@@ -1,4 +1,4 @@
-// RUN: tf-opt %s | tf-opt | FileCheck %s --dump-input=fail
+// RUN: tf-opt %s | tf-opt | FileCheck %s
 
 module attributes {tf_saved_model.semantics} {
 
@@ -25,17 +25,30 @@ module attributes {tf_saved_model.semantics} {
   // CHECK: func @__concrete_function_run_computation
   func @__concrete_function_run_computation(
     %arg0: tensor<f32> {tf_saved_model.index_path = [0, "foo"]},
-    %arg1: tensor<1x64xf32> {tf_saved_model.bound_input = @some_constant},
-    %arg2: tensor<*x!tf.resource> {tf_saved_model.bound_input = @some_variable}
+    %arg1: tensor<!tf.resource<tensor<1x64xf32>>> {tf_saved_model.bound_input = @some_constant},
+    %arg2: tensor<!tf.resource<tensor<?x64xf32>>> {tf_saved_model.bound_input = @some_variable}
   ) -> (
     tensor<f32> {tf_saved_model.index_path = [0, "bar"]}
   ) attributes { tf_saved_model.exported_names = ["some_func"] }
   {
-    "some_dialect.some_call"() {callee = @f} : () -> ()
+    "tf.some_call"() {callee = @f} : () -> ()
     return %arg0 : tensor<f32>
   }
 
   func @f() {
+    return
+  }
+
+}
+
+// -----
+
+module attributes {tf_saved_model.semantics} {
+
+  // CHECK: func @f
+  func @f(
+    %arg0: tensor<f32> {tf.resource_name = "resource"}
+  ) attributes { tf_saved_model.exported_names = ["foo.some_func"] } {
     return
   }
 

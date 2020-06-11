@@ -22,16 +22,16 @@ limitations under the License.
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/Attributes.h"  // TF:llvm-project
-#include "mlir/IR/Builders.h"  // TF:llvm-project
-#include "mlir/IR/Function.h"  // TF:llvm-project
-#include "mlir/IR/Identifier.h"  // TF:llvm-project
-#include "mlir/IR/Module.h"  // TF:llvm-project
-#include "mlir/IR/OpImplementation.h"  // TF:llvm-project
-#include "mlir/IR/StandardTypes.h"  // TF:llvm-project
-#include "mlir/IR/SymbolTable.h"  // TF:llvm-project
-#include "mlir/IR/TypeUtilities.h"  // TF:llvm-project
-#include "mlir/Support/LogicalResult.h"  // TF:llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Function.h"  // from @llvm-project
+#include "mlir/IR/Identifier.h"  // from @llvm-project
+#include "mlir/IR/Module.h"  // from @llvm-project
+#include "mlir/IR/OpImplementation.h"  // from @llvm-project
+#include "mlir/IR/StandardTypes.h"  // from @llvm-project
+#include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/IR/TypeUtilities.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 
 namespace mlir {
@@ -112,12 +112,22 @@ static LogicalResult VerifyIndexPath(Operation *op, NamedAttribute named_attr) {
   return mlir::success();
 }
 
-// Return true if `type` is a tensor of `!tf.resource`. This is the type that is
-// used to represent mutable variables on exported functions' bound inputs.
-static bool IsResourceVarType(Type type) {
-  TensorType tensor_type = type.dyn_cast<TensorType>();
-  if (!tensor_type) return false;
-  return tensor_type.getElementType().isa<TF::ResourceType>();
+Type GetBoundInputArgTypeFor(GlobalTensorOp global_tensor) {
+  auto type = global_tensor.type().cast<TensorType>();
+  return RankedTensorType::get(
+      {}, TF::ResourceType::get({type}, type.getContext()));
+}
+
+static LogicalResult VerifyBoundInputArgType(Operation *op_for_diagnostics,
+                                             Type arg_type,
+                                             GlobalTensorOp global_tensor) {
+  auto expected_type = GetBoundInputArgTypeFor(global_tensor);
+  if (arg_type != expected_type) {
+    return op_for_diagnostics->emitError()
+           << "bound input with type " << arg_type << " expected to have type "
+           << expected_type;
+  }
+  return success();
 }
 
 LogicalResult TensorFlowSavedModelDialect::verifyRegionArgAttribute(
@@ -137,20 +147,7 @@ LogicalResult TensorFlowSavedModelDialect::verifyRegionArgAttribute(
                              << symbol_name << "'";
     }
     auto arg_type = cast<FuncOp>(op).getArgument(arg_index).getType();
-    if (global_tensor.is_mutable()) {
-      if (!IsResourceVarType(arg_type)) {
-        return op->emitError()
-               << "bound inputs for mutable 'tf_saved_model.global_tensor's "
-                  "must be tensors of '!tf.resource'";
-      }
-    } else {
-      if (arg_type != global_tensor.type()) {
-        return op->emitError() << "bound input for immutable "
-                                  "'tf_saved_model.global_tensor' must "
-                                  "match the global tensor's type";
-      }
-    }
-    return success();
+    return VerifyBoundInputArgType(op, arg_type, global_tensor);
   }
   if (named_attr.first == "tf_saved_model.index_path") {
     return VerifyIndexPath(op, named_attr);
@@ -232,7 +229,7 @@ static LogicalResult VerifySavedModelModule(
   for (auto symbol_use : *symbol_uses) {
     auto func = symbol_table.lookup<FuncOp>(
         symbol_use.getSymbolRef().cast<FlatSymbolRefAttr>().getValue());
-    if (func && !GetExportedNames(func).empty()) {
+    if (func && IsExported(func)) {
       return symbol_use.getUser()
           ->emitError("exported function cannot be internally referenced")
           .attachNote(func.getLoc())
@@ -257,9 +254,12 @@ LogicalResult VerifyExportedFunc(FuncOp func) {
       }
       continue;
     }
+    if (func.getArgAttr(i, "tf.resource_name")) {
+      continue;
+    }
     return func.emitError()
-           << "all arguments should have 'tf_saved_model.index_path' or "
-              "'tf_saved_model.bound_input' attributes";
+           << "all arguments should have 'tf_saved_model.index_path', "
+              "'tf_saved_model.bound_input' or 'tf.resource_name' attributes";
   }
   llvm::SmallDenseSet<StringRef, 8> unique_bound_inputs;
   for (int i = 0, e = func.getNumArguments(); i < e; i++) {
@@ -331,7 +331,11 @@ SmallVector<StringRef, 2> GetExportedNames(Operation *op) {
   return ret;
 }
 
-bool IsExported(Operation *op) { return !GetExportedNames(op).empty(); }
+bool IsExported(Operation *op) {
+  auto exported_names =
+      op->getAttrOfType<ArrayAttr>("tf_saved_model.exported_names");
+  return exported_names && exported_names.size() != 0;
+}
 
 bool HasTfSavedModelSemantics(ModuleOp module) {
   return module.getAttr("tf_saved_model.semantics") != nullptr;

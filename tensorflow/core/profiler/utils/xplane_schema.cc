@@ -16,8 +16,12 @@ limitations under the License.
 #include "tensorflow/core/profiler/utils/xplane_schema.h"
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 #include "tensorflow/core/lib/gtl/map_util.h"
+#include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace profiler {
@@ -25,10 +29,24 @@ namespace profiler {
 const absl::string_view kHostThreads = "/host:CPU";
 const absl::string_view kGpuPlanePrefix = "/device:GPU:";
 const absl::string_view kCuptiDriverApiPlaneName = "/host:CUPTI";
+const absl::string_view kMetadataPlane = "/host:metadata";
+const absl::string_view kTFStreamzPlane = "/host:tfstreamz";
+
+const absl::string_view kStepLineName = "Steps";
+const absl::string_view kTensorFlowNameScopeLineName = "TensorFlow Name Scope";
+const absl::string_view kTensorFlowOpLineName = "TensorFlow Ops";
+const absl::string_view kXlaModuleLineName = "XLA Modules";
+const absl::string_view kXlaOpLineName = "XLA Ops";
+const absl::string_view kKernelLaunchLineName = "Launch Stats";
 
 const int32 kHostPlaneId = 49;
 const int32 kGpuPlaneBaseId = 0;
 const int32 kCuptiDriverApiPlaneId = 50;
+const int32 kMetadataPlaneId = 99;
+const int32 kTFStreamzPlaneId = 98;
+
+const int32 kThreadGroupMinPlaneId = kCuptiDriverApiPlaneId + 1;
+const int32 kThreadGroupMaxPlaneId = kTFStreamzPlaneId - 1;
 
 namespace {
 
@@ -51,6 +69,8 @@ const HostEventTypeMap& GetHostEventTypeMap() {
       {"SessionRun", kSessionRun},
       {"FunctionRun", kFunctionRun},
       {"RunGraph", kRunGraph},
+      {"RunGraphDone", kRunGraphDone},
+      {"TfOpRun", kTfOpRun},
       {"EagerKernelExecute", kEagerKernelExecute},
       {"ExecutorState::Process", kExecutorStateProcess},
       {"ExecutorDoneCallback", kExecutorDoneCallback},
@@ -80,8 +100,15 @@ const HostEventTypeMap& GetHostEventTypeMap() {
       {"WhileOp-StartBody", kWhileOpStartBody},
       {"ForOp", kForOp},
       {"PartitionedCallOp", kPartitionedCallOp},
+      // XLA related.
+      {"LocalExecutable::ExecuteOnLocalDevices",
+       kLocalExecutableExecuteOnLocalDevice},
+      {"LocalExecutable::Execute", kLocalExecutableExecute},
       // tf.data related.
       {"IteratorGetNextOp::DoCompute", kIteratorGetNextOp},
+      {"IteratorGetNextAsOptionalOp::DoCompute", kIteratorGetNextAsOptionalOp},
+      // Virtual events for grouping.
+      {"AsyncExecutorTraceContext", kAsyncExecutorTraceContext},
       // GPU related.
       {"KernelLaunch", kKernelLaunch},
       {"KernelExecute", kKernelExecute},
@@ -115,7 +142,20 @@ const StatTypeMap& GetStatTypeMap() {
       {"fragmentation", kFragmentation},
       {"peak_bytes_in_use", kPeakBytesInUse},
       {"requested_bytes", kRequestedBytes},
+      {"allocation_bytes", kAllocationBytes},
+      {"addr", kAddress},
+      {"region_type", kRegionType},
+      {"data_type", kDataType},
       {"shape", kTensorShapes},
+      {"kpi_name", kKpiName},
+      {"kpi_value", kKpiValue},
+      // XPlane semantics related.
+      {"$pt", kProducerType},
+      {"$ct", kConsumerType},
+      {"$p", kProducerId},
+      {"$c", kConsumerId},
+      {"$r", kIsRoot},
+      {"$a", kIsAsync},
       // Device trace arguments.
       {"device_id", kDeviceId},
       {"context_id", kContextId},
@@ -127,11 +167,16 @@ const StatTypeMap& GetStatTypeMap() {
       {"stream", kStream},
       // Stats added when processing traces.
       {"group_id", kGroupId},
+      {"flow", kFlow},
       {"step_name", kStepName},
       {"level 0", kLevel0},
       {"tf_op", kTfOp},
       {"hlo_op", kHloOp},
       {"hlo_module", kHloModule},
+      {"equation", kEquation},
+      {"is_eager", kIsEager},
+      {"tf_function_call", kTfFunctionCall},
+      {"tracing_count", kTfFunctionTracingCount},
       // Performance counter related.
       {"Raw Value", kRawValue},
       {"Scaled Value", kScaledValue},
@@ -139,6 +184,7 @@ const StatTypeMap& GetStatTypeMap() {
       // XLA metadata map related.
       {"SELF_DURATION_PS", kSelfDurationPs},
       {"MIN_DURATION_PS", kMinDurationPs},
+      {"Hlo Proto", kHloProto},
       // Device capability related.
       {"clock_rate", kDevCapClockRateKHz},
       {"core_count", kDevCapCoreCount},
@@ -185,6 +231,15 @@ absl::optional<int64> FindStatType(absl::string_view stat_name) {
     return *stat_type;
   }
   return absl::nullopt;
+}
+
+bool IsInternalStat(absl::optional<int64> stat_type) {
+  static const auto* const kInternalStats = new absl::flat_hash_set<int64>{
+      StatType::kKernelDetails, StatType::kLevel0,
+      StatType::kProducerType,  StatType::kProducerId,
+      StatType::kConsumerType,  StatType::kConsumerId,
+      StatType::kIsRoot,        StatType::kIsAsync};
+  return stat_type.has_value() && kInternalStats->contains(*stat_type);
 }
 
 }  // namespace profiler

@@ -1,7 +1,11 @@
-load("//tensorflow:tensorflow.bzl", "tf_native_cc_binary")
+load("//tensorflow:tensorflow.bzl", "tf_cc_test", "tf_native_cc_binary")
 load(
     "//tensorflow/core/platform:build_config.bzl",
     "tf_proto_library",
+)
+load(
+    "//third_party/mlir:tblgen.bzl",
+    "gentbl",
 )
 
 package(
@@ -14,12 +18,16 @@ package(
 package_group(
     name = "friends",
     includes = ["//third_party/mlir:subpackages"],
-    packages = ["//tensorflow/compiler/mlir/..."],
+    packages = [
+        "//learning/brain/experimental/mlir/quantization/...",
+        "//tensorflow/compiler/mlir/...",
+    ],
 )
 
 exports_files([
     "quantization_traits.h",
     "quantization_config.h",
+    "quantization_utils.h",
 ])
 
 filegroup(
@@ -28,6 +36,25 @@ filegroup(
         "quantization.td",
         "@llvm-project//mlir:OpBaseTdFiles",
         "@llvm-project//mlir:QuantizationOpsTdFiles",
+    ],
+)
+
+gentbl(
+    name = "quantization_interfaces_inc_gen",
+    tbl_outs = [
+        (
+            "-gen-op-interface-decls",
+            "quantization_interface.h.inc",
+        ),
+        (
+            "-gen-op-interface-defs",
+            "quantization_interface.cc.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "quantization.td",
+    td_srcs = [
+        ":quantization_td_files",
     ],
 )
 
@@ -68,9 +95,11 @@ cc_library(
     name = "quantization_lib",
     srcs = [
         "quantization_driver.cc",
+        "quantization_interface.cc.inc",
         "quantization_utils.cc",
     ],
     hdrs = [
+        "quantization_interface.h.inc",
         "quantization_traits.h",
         "quantization_utils.h",
     ],
@@ -109,5 +138,54 @@ tf_native_cc_binary(
         "@llvm-project//llvm:support",
         "@llvm-project//llvm:tablegen",
         "@llvm-project//mlir:TableGen",
+    ],
+)
+
+cc_library(
+    name = "numerical_utils",
+    srcs = ["numerical_utils.cc"],
+    hdrs = ["numerical_utils.h"],
+    deps = [
+        "@com_google_absl//absl/types:optional",
+    ],
+)
+
+cc_library(
+    name = "device_target",
+    srcs = ["device_target.cc"],
+    hdrs = ["device_target.h"],
+    deps = [
+        ":numerical_utils",
+        "@com_google_absl//absl/types:optional",
+        "@llvm-project//llvm:support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:QuantOps",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "quantization_context",
+    srcs = ["quantization_context.cc"],
+    hdrs = ["quantization_context.h"],
+    deps = [
+        ":device_target",
+        ":quantization_lib",
+        "@com_google_absl//absl/memory",
+        "@llvm-project//llvm:support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:QuantOps",
+        "@llvm-project//mlir:StandardOps",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+tf_cc_test(
+    name = "numerical_utils_test",
+    srcs = ["numerical_utils_test.cc"],
+    deps = [
+        ":numerical_utils",
+        "@com_google_absl//absl/types:optional",
+        "@com_google_googletest//:gtest_main",
     ],
 )

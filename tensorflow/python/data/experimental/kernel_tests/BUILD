@@ -1,5 +1,5 @@
-load("//tensorflow:tensorflow.bzl", "tf_py_test")
-load("//tensorflow:tensorflow.bzl", "cuda_py_test")
+load("//tensorflow:tensorflow.bzl", "tf_py_test")  # buildifier: disable=same-origin-load
+load("//tensorflow:tensorflow.bzl", "cuda_py_test")  # buildifier: disable=same-origin-load
 
 package(
     default_visibility = ["//tensorflow:internal"],
@@ -77,10 +77,10 @@ tf_py_test(
 )
 
 tf_py_test(
-    name = "cardinality_test",
-    srcs = ["cardinality_test.py"],
+    name = "compression_ops_test",
+    srcs = ["compression_ops_test.py"],
     deps = [
-        "//tensorflow/python/data/experimental/ops:cardinality",
+        "//tensorflow/python/data/experimental/ops:compression_ops",
         "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/data/ops:dataset_ops",
         "@absl_py//absl/testing:parameterized",
@@ -486,7 +486,7 @@ tf_py_test(
 
 tf_py_test(
     name = "parse_example_dataset_test",
-    size = "small",
+    size = "medium",
     srcs = ["parse_example_dataset_test.py"],
     shard_count = 4,
     deps = [
@@ -540,6 +540,20 @@ tf_py_test(
     ],
 )
 
+tf_py_test(
+    name = "random_dataset_test",
+    size = "small",
+    srcs = ["random_dataset_test.py"],
+    deps = [
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:framework_test_lib",
+        "//tensorflow/python/data/kernel_tests:test_base",
+        "//tensorflow/python/data/ops:dataset_ops",
+        "//tensorflow/python/data/ops:iterator_ops",
+        "@absl_py//absl/testing:parameterized",
+    ],
+)
+
 py_library(
     name = "reader_dataset_ops_test_base",
     srcs = [
@@ -567,11 +581,8 @@ tf_py_test(
     size = "small",
     srcs = ["rebatch_dataset_test.py"],
     deps = [
-        "//tensorflow/core:protos_all_py",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:image_ops",
-        "//tensorflow/python:parsing_ops",
-        "//tensorflow/python/data/experimental/ops:readers",
         "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/data/util:nest",
@@ -723,6 +734,7 @@ tf_py_test(
 tf_py_test(
     name = "snapshot_test",
     size = "medium",
+    timeout = "long",
     srcs = ["snapshot_test.py"],
     shard_count = 10,
     deps = [
@@ -730,16 +742,19 @@ tf_py_test(
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:string_ops",
+        "//tensorflow/python/data/experimental/ops:readers",
         "//tensorflow/python/data/experimental/ops:snapshot",
+        "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/data/ops:readers",
+        "//tensorflow/python/data/util:nest",
         "@absl_py//absl/testing:parameterized",
     ],
 )
 
 tf_py_test(
     name = "stats_dataset_ops_test",
-    size = "large",
+    size = "small",
     srcs = ["stats_dataset_ops_test.py"],
     tags = [
         "no_pip",

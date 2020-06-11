@@ -20,6 +20,7 @@ from __future__ import print_function
 
 from tensorflow.python import tf2
 from tensorflow.python.distribute import central_storage_strategy
+from tensorflow.python.distribute import collective_all_reduce_strategy
 from tensorflow.python.distribute import combinations
 from tensorflow.python.distribute import distribution_strategy_context
 from tensorflow.python.distribute import mirrored_strategy as mirrored_lib
@@ -46,7 +47,6 @@ from tensorflow.python.training import ftrl
 from tensorflow.python.training import gradient_descent
 from tensorflow.python.training import rmsprop
 
-
 FLAGS = flags.FLAGS
 
 _did_connect_to_cluster = False
@@ -57,16 +57,26 @@ def _get_tpu_strategy_creator(steps_per_run, use_single_core=False, **kwargs):
   def _create_tpu_strategy():
     global _did_connect_to_cluster
 
-    # These flags will be defined by tpu_test_wrapper.py.
-    resolver = tpu_cluster_resolver.TPUClusterResolver(
-        tpu=hasattr(FLAGS, "tpu") and FLAGS.tpu or "",
-        zone=hasattr(FLAGS, "zone") and FLAGS.zone or None,
-        project=hasattr(FLAGS, "project") and FLAGS.project or None,
-    )
+    try:
+      # Attempt to locally discover the TPU. This will fail for Cloud TPU, in
+      # which case we fall back to the values passed as flags.
+      resolver = tpu_cluster_resolver.TPUClusterResolver()
+      did_automatically_resolve = True
+    except ValueError:
+      did_automatically_resolve = False
+
+      # These flags will be defined by tpu_test_wrapper.py.
+      resolver = tpu_cluster_resolver.TPUClusterResolver(
+          tpu=hasattr(FLAGS, "tpu") and FLAGS.tpu or "",
+          zone=hasattr(FLAGS, "zone") and FLAGS.zone or None,
+          project=hasattr(FLAGS, "project") and FLAGS.project or None,
+      )
+
     # Only connect once per process, rather than per test method.
-    if hasattr(FLAGS, "tpu") and FLAGS.tpu and not _did_connect_to_cluster:
-      remote.connect_to_cluster(resolver)
-      _did_connect_to_cluster = True
+    if getattr(FLAGS, "tpu", "") or did_automatically_resolve:
+      if not _did_connect_to_cluster:
+        remote.connect_to_cluster(resolver)
+        _did_connect_to_cluster = True
 
     topology = tpu_strategy_util.initialize_tpu_system(resolver)
     device_assignment = None
@@ -148,6 +158,18 @@ central_storage_strategy_with_gpu_and_cpu = combinations.NamedDistribution(
     lambda: central_storage_strategy.CentralStorageStrategy(
         ["/gpu:0", "/cpu:0"]),
     required_gpus=1)
+multi_worker_mirrored_two_workers = combinations.NamedDistribution(
+    "MultiWorkerMirroredTwoWorkers",
+    collective_all_reduce_strategy.CollectiveAllReduceStrategy,
+    has_chief=False,
+    num_workers=2,
+)
+multi_worker_mirrored_one_chief_one_worker = combinations.NamedDistribution(
+    "MultiWorkerMirroredOneChiefOneWorker",
+    collective_all_reduce_strategy.CollectiveAllReduceStrategy,
+    has_chief=True,
+    num_workers=1,
+)
 
 gradient_descent_optimizer_v1_fn = combinations.NamedObject(
     "GradientDescentV1",
@@ -252,6 +274,12 @@ def distributions_and_v1_and_v2_optimizers():
 
 strategies_minus_tpu = [
     default_strategy, one_device_strategy, one_device_strategy_gpu,
+    mirrored_strategy_with_gpu_and_cpu, mirrored_strategy_with_two_gpus,
+    central_storage_strategy_with_gpu_and_cpu
+]
+
+strategies_minus_default_and_tpu = [
+    one_device_strategy, one_device_strategy_gpu,
     mirrored_strategy_with_gpu_and_cpu, mirrored_strategy_with_two_gpus
 ]
 
@@ -260,6 +288,8 @@ tpu_strategies = [
     tpu_strategy_one_step,
     cloud_tpu_strategy,
 ]
+
+all_strategies_minus_default = strategies_minus_default_and_tpu + tpu_strategies
 
 all_strategies = strategies_minus_tpu + tpu_strategies
 

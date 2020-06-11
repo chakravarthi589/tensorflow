@@ -13,13 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TFLITE_WITH_RUY
+#ifndef TFLITE_WITH_RUY_ONLY
 
 #include "tensorflow/lite/kernels/cpu_backend_gemm_eigen.h"
 
 // See b/131835803: in TFLite code, because eigen_spatial_convolutions.h does
 // #define Eigen EigenForTFLite, it is difficult to have any #include of Eigen
-// headers in a header file, as that results in name clases (compilation
+// headers in a header file, as that results in name classes (compilation
 // errors) depending on the order in which these headers are #included.
 // So we have moved the #include of Eigen here, in a .cc file, where we have
 // control over the header #include sequence.
@@ -78,4 +78,4 @@ void GemmImplUsingEigen::Run(
 }  // namespace cpu_backend_gemm
 }  // namespace tflite
 
-#endif  // not TFLITE_WITH_RUY
+#endif  // not TFLITE_WITH_RUY_ONLY

@@ -122,6 +122,7 @@ GPUOperation::GPUOperation(GPUOperation&& operation)
     : definition_(std::move(operation.definition_)),
       src_(std::move(operation.src_)),
       dst_(std::move(operation.dst_)),
+      args_(std::move(operation.args_)),
       linked_operations_(std::move(operation.linked_operations_)) {}
 
 GPUOperation& GPUOperation::operator=(GPUOperation&& operation) {
@@ -129,6 +130,7 @@ GPUOperation& GPUOperation::operator=(GPUOperation&& operation) {
     definition_ = std::move(operation.definition_);
     src_ = std::move(operation.src_);
     dst_ = std::move(operation.dst_);
+    args_ = std::move(operation.args_);
     linked_operations_ = std::move(operation.linked_operations_);
   }
   return *this;
@@ -154,7 +156,7 @@ ElementwiseOperation& ElementwiseOperation::operator=(
   return *this;
 }
 
-Status ElementwiseOperation::BindArguments() {
+absl::Status ElementwiseOperation::BindArguments() {
   kernel_.ResetBindingCounter();
   RETURN_IF_ERROR(kernel_.SetMemoryAuto(src_[0]->GetMemoryPtr()));
   RETURN_IF_ERROR(BindArguments(&kernel_));
@@ -162,7 +164,7 @@ Status ElementwiseOperation::BindArguments() {
   RETURN_IF_ERROR(kernel_.SetMemoryAuto(dst_[0]->GetMemoryPtrForWriting()));
   RETURN_IF_ERROR(kernel_.SetBytesAuto(src_[0]->GetWBatchedHSB()));
   RETURN_IF_ERROR(kernel_.SetBytesAuto(dst_[0]->GetWBatchedHSB()));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 int3 ElementwiseOperation::GetGridSize() const {
@@ -172,19 +174,20 @@ int3 ElementwiseOperation::GetGridSize() const {
   return int3(grid_x, grid_y, grid_z);
 }
 
-Status ElementwiseOperation::Compile(const CreationContext& creation_context) {
+absl::Status ElementwiseOperation::Compile(
+    const CreationContext& creation_context) {
   const auto code = GetElementWiseCode(definition_, *this, linked_operations_);
   return creation_context.cache->GetOrCreateCLKernel(
       code, "main_function", *creation_context.context,
       *creation_context.device, &kernel_);
 }
 
-Status ElementwiseOperation::AddToQueue(CLCommandQueue* queue) {
+absl::Status ElementwiseOperation::AddToQueue(CLCommandQueue* queue) {
   RETURN_IF_ERROR(BindArguments());
   return queue->DispatchImplicit(kernel_, GetGridSize(), work_group_size_);
 }
 
-Status ElementwiseOperation::Tune(const TuningParameters& params) {
+absl::Status ElementwiseOperation::Tune(const TuningParameters& params) {
   RETURN_IF_ERROR(BindArguments());
   return GetBestWorkGroup(params, kernel_, GetGridSize(), &work_group_size_);
 }
@@ -204,17 +207,17 @@ std::string PostProcess(const std::vector<ElementwiseOperation*>& linked_ops,
                         const LinkingContext& context) {
   std::string code;
   for (auto linked_op : linked_ops) {
-    code += linked_op->GetCoreCode(context);
+    code += "{" + linked_op->GetCoreCode(context) + "}";
   }
   return code;
 }
 
-Status BindArgs(CLKernel* kernel,
-                const std::vector<ElementwiseOperation*>& linked_ops) {
+absl::Status BindArgs(CLKernel* kernel,
+                      const std::vector<ElementwiseOperation*>& linked_ops) {
   for (auto linked_op : linked_ops) {
     RETURN_IF_ERROR(linked_op->BindArguments(kernel));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace cl

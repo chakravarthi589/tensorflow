@@ -25,9 +25,10 @@ from tensorflow.python.distribute import cross_device_ops as cross_device_ops_li
 from tensorflow.python.distribute import device_util
 from tensorflow.python.distribute import distribute_lib
 from tensorflow.python.distribute import input_lib
-from tensorflow.python.distribute import mirrored_strategy
+from tensorflow.python.distribute import mirrored_run
 from tensorflow.python.distribute import multi_worker_util
 from tensorflow.python.distribute import numpy_dataset
+from tensorflow.python.distribute import ps_values
 from tensorflow.python.distribute import values
 from tensorflow.python.distribute.cluster_resolver import SimpleClusterResolver
 from tensorflow.python.distribute.cluster_resolver import TFConfigClusterResolver
@@ -119,6 +120,31 @@ class ParameterServerStrategy(distribute_lib.Strategy):
         "ParameterServerStrategy")
     distribute_lib.distribution_strategy_replica_gauge.get_cell("num_ps").set(
         len(self.extended.parameter_devices))
+
+  def experimental_distribute_dataset(self, dataset):
+    self._raise_pss_error_if_eager()
+    super(ParameterServerStrategy,
+          self).experimental_distribute_dataset(dataset=dataset)
+
+  def experimental_distribute_datasets_from_function(self, dataset_fn):
+    self._raise_pss_error_if_eager()
+    super(ParameterServerStrategy,
+          self).experimental_distribute_datasets_from_function(
+              dataset_fn=dataset_fn)
+
+  def run(self, fn, args=(), kwargs=None, options=None):
+    self._raise_pss_error_if_eager()
+    super(ParameterServerStrategy, self).run(
+        fn, args=args, kwargs=kwargs, options=options)
+
+  def scope(self):
+    self._raise_pss_error_if_eager()
+    return super(ParameterServerStrategy, self).scope()
+
+  def _raise_pss_error_if_eager(self):
+    if context.executing_eagerly():
+      raise NotImplementedError("ParameterServerStrategy currently only works "
+                                "with the tf.Estimator API")
 
 
 @tf_export(v1=["distribute.experimental.ParameterServerStrategy"])  # pylint: disable=missing-docstring
@@ -370,6 +396,12 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
         [input_context],
         self._container_strategy())
 
+  def _experimental_distribute_values_from_function(self, value_fn):
+    # TODO(b/137795644): Implement this method for ParameterServerStrategy if
+    # needed.
+    raise NotImplementedError("_experimental_distribute_values_from_function "
+                              "not yet implemented in ParameterServerStrategy.")
+
   def _broadcast_to(self, tensor, destinations):
     # This is both a fast path for Python constants, and a way to delay
     # converting Python values to a tensor until we know what type it
@@ -410,8 +442,8 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
 
         # Create and wrap the variable.
         v = next_creator(**kwargs)
-        wrapped = values.AggregatingVariable(
-            self._container_strategy(), v, aggregation)
+        wrapped = ps_values.AggregatingVariable(self._container_strategy(), v,
+                                                aggregation)
 
         # Add the wrapped variable to the requested collections.
         # The handling of eager mode and the global step matches
@@ -450,9 +482,8 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
         return var_creator(**kwargs)
 
   def _call_for_each_replica(self, fn, args, kwargs):
-    # pylint: disable=protected-access
-    return mirrored_strategy._call_for_each_replica(
-        self._container_strategy(), self._compute_devices, fn, args, kwargs)
+    return mirrored_run.call_for_each_replica(self._container_strategy(), fn,
+                                              args, kwargs)
 
   def _verify_destinations_not_different_worker(self, destinations):
     if not self._cluster_spec:
@@ -466,28 +497,33 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
             "Cannot reduce to another worker: %r, current worker is %r" %
             (d, self._input_workers.worker_devices[0]))
 
-  def _reduce_to(self, reduce_op, value, destinations):
+  def _reduce_to(self, reduce_op, value, destinations, experimental_hints):
     self._verify_destinations_not_different_worker(destinations)
     if not isinstance(value, values.DistributedValues):
       # pylint: disable=protected-access
       return cross_device_ops_lib.reduce_non_distributed_value(
           reduce_op, value, destinations, self._num_replicas_in_sync)
     return self._cross_device_ops.reduce(
-        reduce_op, value, destinations=destinations)
+        reduce_op,
+        value,
+        destinations=destinations,
+        experimental_hints=experimental_hints)
 
-  def _batch_reduce_to(self, reduce_op, value_destination_pairs):
+  def _batch_reduce_to(self, reduce_op, value_destination_pairs,
+                       experimental_hints):
     for _, destinations in value_destination_pairs:
       self._verify_destinations_not_different_worker(destinations)
     return self._cross_device_ops.batch_reduce(reduce_op,
-                                               value_destination_pairs)
+                                               value_destination_pairs,
+                                               experimental_hints)
 
   def _select_single_value(self, structured):
     """Select any single value in `structured`."""
 
     def _select_fn(x):  # pylint: disable=g-missing-docstring
       if isinstance(x, values.Mirrored):
-        if len(x.devices) == 1:
-          return x.primary
+        if len(x._devices) == 1:  # pylint: disable=protected-access
+          return x._primary  # pylint: disable=protected-access
         else:
           raise ValueError(
               "You cannot update variable with a Mirrored object with multiple "
@@ -504,7 +540,7 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
     return nest.map_structure(_select_fn, structured)
 
   def _update(self, var, fn, args, kwargs, group):
-    if isinstance(var, values.AggregatingVariable):
+    if isinstance(var, ps_values.AggregatingVariable):
       var = var.get()
     if not resource_variable_ops.is_resource_variable(var):
       raise ValueError(
@@ -534,7 +570,7 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
 
   def value_container(self, val):
     if (hasattr(val, "_aggregating_container") and
-        not isinstance(val, values.AggregatingVariable)):
+        not isinstance(val, ps_values.AggregatingVariable)):
       wrapper = val._aggregating_container()  # pylint: disable=protected-access
       if wrapper is not None:
         return wrapper
@@ -602,9 +638,7 @@ class ParameterServerStrategyExtended(distribute_lib.StrategyExtendedV1):
 
   def _in_multi_worker_mode(self):
     """Whether this strategy indicates working in multi-worker settings."""
-    # With a PS job, PS strategy should always be considered as in multi
-    # worker mode.
-    return True
+    return self._cluster_spec is not None
 
   @property
   def _num_replicas_in_sync(self):

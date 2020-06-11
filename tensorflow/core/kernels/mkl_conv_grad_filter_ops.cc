@@ -62,13 +62,19 @@ struct MklConvBwdFilterParams {
   memory::dims dilations;
   memory::dims padding_left;
   memory::dims padding_right;
+#ifndef ENABLE_MKLDNN_V1
   padding_kind padding;
+#endif  // !ENABLE_MKLDNN_V1
 
   MklConvBwdFilterParams(memory::dims src_dims, memory::dims diff_filter_dims,
                          memory::dims diff_bias_dims,
                          memory::dims diff_dst_dims, memory::dims strides,
                          memory::dims dilations, memory::dims padding_left,
+#ifndef ENABLE_MKLDNN_V1
                          memory::dims padding_right, padding_kind padding)
+#else
+                         memory::dims padding_right)
+#endif  // !ENABLE_MKLDNN_V1
       : src_dims(src_dims),
         diff_filter_dims(diff_filter_dims),
         diff_bias_dims(diff_bias_dims),
@@ -76,8 +82,14 @@ struct MklConvBwdFilterParams {
         strides(strides),
         dilations(dilations),
         padding_left(padding_left),
+#ifndef ENABLE_MKLDNN_V1
         padding_right(padding_right),
-        padding(padding) {}
+        padding(padding) {
+  }
+#else
+        padding_right(padding_right) {
+  }
+#endif  // !ENABLE_MKLDNN_V1
 };
 
 template <typename T>
@@ -85,9 +97,7 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
  public:
   explicit MklConvBwdFilterPrimitive(
       const MklConvBwdFilterParams& convBwdFilterDims)
-      : cpu_engine_(ENGINE_CPU, 0) {
-    context_.bwd_filter_stream.reset(new CPU_STREAM(cpu_engine_));
-
+      : MklPrimitive(engine(ENGINE_CPU, 0)) {
     // Create convolution backward filter primitive.
     if (context_.conv_bwd_filter == nullptr) {
       Setup(convBwdFilterDims);
@@ -102,7 +112,8 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
   //   diff_bias_data:   output data buffer for diff_bias
   //   diff_dst_data:    input data buffer for diff_dst
   void Execute(const T* src_data, const T* diff_filter_data,
-               const T* diff_bias_data, const T* diff_dst_data) {
+               const T* diff_bias_data, const T* diff_dst_data,
+               std::shared_ptr<stream> bwd_filter_stream) {
     context_.src_mem->set_data_handle(
         static_cast<void*>(const_cast<T*>(src_data)));
     context_.diff_filter_mem->set_data_handle(
@@ -115,11 +126,10 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
         static_cast<void*>(const_cast<T*>(diff_dst_data)));
 
 #ifdef ENABLE_MKLDNN_V1
-    execute_primitives(context_.bwd_filter_primitives,
-                       context_.bwd_filter_stream,
+    execute_primitives(context_.bwd_filter_primitives, bwd_filter_stream,
                        context_.bwd_filter_primitives_args);
 #else
-    context_.bwd_filter_stream->submit(context_.bwd_filter_primitives);
+    bwd_filter_stream->submit(context_.bwd_filter_primitives);
 #endif
 
     context_.src_mem->set_data_handle(DummyData);
@@ -135,8 +145,10 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
   //   diff_filter_data: output data buffer of diff_filter
   //   diff_dst_data:    input data buffer of diff_dst
   void Execute(const T* src_data, const T* diff_filter_data,
-               const T* diff_dst_data) {
-    Execute(src_data, diff_filter_data, nullptr, diff_dst_data);
+               const T* diff_dst_data,
+               std::shared_ptr<stream> bwd_filter_stream) {
+    Execute(src_data, diff_filter_data, nullptr, diff_dst_data,
+            bwd_filter_stream);
   }
 
 #ifndef ENABLE_MKLDNN_V1
@@ -211,8 +223,7 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
           src_md(nullptr),
           diff_filter_md(nullptr),
           diff_bias_md(nullptr),
-          diff_dst_md(nullptr),
-          bwd_filter_stream(nullptr) {
+          diff_dst_md(nullptr) {
     }
   };
 
@@ -241,8 +252,12 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
         prop_kind::forward, ALGORITHM::convolution_direct, *context_.src_md,
         *context_.diff_filter_md, *context_.diff_dst_md,
         convBwdFilterDims.strides, convBwdFilterDims.dilations,
+#ifndef ENABLE_MKLDNN_V1
         convBwdFilterDims.padding_left, convBwdFilterDims.padding_right,
         convBwdFilterDims.padding));
+#else
+        convBwdFilterDims.padding_left, convBwdFilterDims.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
     context_.fwd_pd.reset(new ConvFwdPd(*context_.fwd_desc, cpu_engine_));
 
     // Create descriptor and primitive descriptor for convolution bwd filter.
@@ -252,14 +267,22 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
           *context_.diff_filter_md, *context_.diff_bias_md,
           *context_.diff_dst_md, convBwdFilterDims.strides,
           convBwdFilterDims.dilations, convBwdFilterDims.padding_left,
+#ifndef ENABLE_MKLDNN_V1
           convBwdFilterDims.padding_right, convBwdFilterDims.padding));
+#else
+          convBwdFilterDims.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
     } else {
       context_.bwd_filter_desc.reset(new ConvBwdFilterDesc(
           ALGORITHM::convolution_direct, *context_.src_md,
           *context_.diff_filter_md, *context_.diff_dst_md,
           convBwdFilterDims.strides, convBwdFilterDims.dilations,
+#ifndef ENABLE_MKLDNN_V1
           convBwdFilterDims.padding_left, convBwdFilterDims.padding_right,
           convBwdFilterDims.padding));
+#else
+          convBwdFilterDims.padding_left, convBwdFilterDims.padding_right));
+#endif  // !ENABLE_MKLDNN_V1
     }
     context_.bwd_filter_pd.reset(new ConvBwdFilterPd(
         *context_.bwd_filter_desc, cpu_engine_, *context_.fwd_pd));
@@ -321,7 +344,6 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
   }
 
   struct ConvBwdFilterContext context_;
-  engine cpu_engine_;
 };
 
 template <typename T>
@@ -495,14 +517,17 @@ class MklConvCustomBackpropFilterOp
       // The default dilation factor for each dimension is 1 in TF and
       // 0 in MKL-DNN.
       for (int i = 0; i < dilations.size(); ++i) --dilations[i];
-
       MklConvBwdFilterParams convBwdFilterDims(
           fwd_src_dims, fwd_filter_dims, diff_bias_dims, diff_dst_dims, strides,
+#ifndef ENABLE_MKLDNN_V1
           dilations, padding_left, padding_right,
           TFPaddingToMklDnnPadding(this->padding_));
+#else
+          dilations, padding_left, padding_right);
+#endif  // !ENABLE_MKLDNN_V1
 
-      // MKL-DNN allocates large buffers when a conv gradient filter primtive is
-      // created. So we don't cache conv backward primitives when the env
+      // MKL-DNN allocates large buffers when a conv gradient filter primitive
+      // is created. So we don't cache conv backward primitives when the env
       // variable TF_MKL_OPTIMIZE_PRIMITIVE_MEMUSE is set to true.
       bool do_not_cache = MklPrimitiveFactory<T>::IsPrimitiveMemOptEnabled();
 
@@ -573,8 +598,10 @@ class MklConvCustomBackpropFilterOp
       auto bwd_filter_pd = conv_bwd_filter->GetPrimitiveDesc();
       if (IS_SRC_REORDER_NEEDED(fwd_src_md, bwd_filter_pd, conv_bwd_filter)) {
         src.SetUsrMem(fwd_src_md, &src_tensor);
-        src.CheckReorderToOpMem(MEMORY_PD_WITHOUT_DATA(
-            bwd_filter_pd->PRIMITIVE_DESC_SRC, cpu_engine_));
+        src.CheckReorderToOpMem(
+            MEMORY_PD_WITHOUT_DATA(bwd_filter_pd->PRIMITIVE_DESC_SRC,
+                                   cpu_engine_),
+            context);
         src_data = static_cast<T*>(src.GetOpMem().get_data_handle());
       } else {
         src_data = static_cast<T*>(const_cast<T*>(src_tensor.flat<T>().data()));
@@ -585,8 +612,10 @@ class MklConvCustomBackpropFilterOp
       if (IS_DIFF_DST_REORDER_NEEDED(diff_dst_md, bwd_filter_pd,
                                      conv_bwd_filter)) {
         diff_dst.SetUsrMem(diff_dst_md, &diff_dst_tensor);
-        diff_dst.CheckReorderToOpMem(MEMORY_PD_WITHOUT_DATA(
-            bwd_filter_pd->PRIMITIVE_DESC_DIFF_DST, cpu_engine_));
+        diff_dst.CheckReorderToOpMem(
+            MEMORY_PD_WITHOUT_DATA(bwd_filter_pd->PRIMITIVE_DESC_DIFF_DST,
+                                   cpu_engine_),
+            context);
         diff_dst_data = static_cast<T*>(diff_dst.GetOpMem().get_data_handle());
       } else {
         diff_dst_data =
@@ -619,18 +648,21 @@ class MklConvCustomBackpropFilterOp
       }
 
       // Execute convolution backward filter.
+      std::shared_ptr<stream> bwd_cpu_stream;
+      bwd_cpu_stream.reset(CreateStream(context, conv_bwd_filter->GetEngine()));
       if (bias_enabled) {
         T* diff_bias_data =
             static_cast<T*>(const_cast<T*>(diff_bias_tensor->flat<T>().data()));
         conv_bwd_filter->Execute(src_data, diff_filter_data, diff_bias_data,
-                                 diff_dst_data);
+                                 diff_dst_data, bwd_cpu_stream);
       } else {
-        conv_bwd_filter->Execute(src_data, diff_filter_data, diff_dst_data);
+        conv_bwd_filter->Execute(src_data, diff_filter_data, diff_dst_data,
+                                 bwd_cpu_stream);
       }
 
       // Reorder diff_filter back to Tensorflow layout if necessary.
       if (diff_filter_reorder_required) {
-        diff_filter.InsertReorderToUserMem();
+        diff_filter.InsertReorderToUserMem(context);
       }
 
       // Delete primitive since it is not cached.

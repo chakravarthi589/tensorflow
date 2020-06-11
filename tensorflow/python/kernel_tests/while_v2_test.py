@@ -49,6 +49,7 @@ from tensorflow.python.ops import while_v2
 from tensorflow.python.ops.while_v2 import while_loop as while_loop_v2
 from tensorflow.python.platform import test
 
+
 def random_gamma(shape):  # pylint: disable=invalid-name
   return random_ops.random_gamma(shape, 1.0)
 
@@ -340,14 +341,24 @@ class WhileV2Test(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def Fn():
+
+      def Body1(v):
+        x.assign(x)
+        return v * x
+
       ret1 = while_loop_v2(
           lambda v: v < 4.,
-          lambda v: v * x, [c],
+          Body1, [c],
           return_same_structure=False,
           name="while_1")  # 2x
+
+      def Body2(v):
+        x.assign(x)
+        return v * x * x
+
       ret2 = while_loop_v2(
           lambda v: v < 16.,
-          lambda v: v * x * x, [c],
+          Body2, [c],
           return_same_structure=False,
           name="while_2")  # 4x
       return ret1, ret2
@@ -368,24 +379,44 @@ class WhileV2Test(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def Fn():
+
+      def Body1(v):
+        x1.assign(x1)
+        return v * x1
+
       ret1 = while_loop_v2(
           lambda v: v < 4.,
-          lambda v: v * x1, [c],
+          Body1, [c],
           return_same_structure=False,
           name="while_1")  # 2x
+
+      def Body2(v):
+        x1.assign(x1)
+        return v * x1 * x1
+
       ret2 = while_loop_v2(
           lambda v: v < 16.,
-          lambda v: v * x1 * x1, [c],
+          Body2, [c],
           return_same_structure=False,
           name="while_2")  # 4x
+
+      def Body3(v):
+        x2.assign(x2)
+        return v * x2
+
       ret3 = while_loop_v2(
           lambda v: v < 4.,
-          lambda v: v * x2, [c],
+          Body3, [c],
           return_same_structure=False,
           name="while_3")  # 3x
+
+      def Body4(v):
+        x2.assign(x2)
+        return v * x2 * x2
+
       ret4 = while_loop_v2(
           lambda v: v < 16.,
-          lambda v: v * x2 * x2, [c],
+          Body4, [c],
           return_same_structure=False,
           name="while_4")  # 9x
       ret5 = while_loop_v2(
@@ -1144,6 +1175,72 @@ class WhileV2Test(test.TestCase, parameterized.TestCase):
       return grad
 
     Fn()
+
+  @test_util.run_v2_only
+  def testInheritParentNameScope(self):
+
+    @def_function.function
+    def F():
+      with ops.name_scope("foo"):
+
+        def Cond(unused_i):
+          with ops.name_scope("cond"):
+            actual_name_scope = ops.get_name_scope()
+            expected_name_scope = "foo/while/cond"
+            assert actual_name_scope == expected_name_scope, (
+                "%s does not match %s" %
+                (actual_name_scope, expected_name_scope))
+          return False
+
+        def Body(i):
+          with ops.name_scope("body"):
+            actual_name_scope = ops.get_name_scope()
+            expected_name_scope = "foo/while/body"
+            assert actual_name_scope == expected_name_scope, (
+                "%s does not match %s" %
+                (actual_name_scope, expected_name_scope))
+          return i
+
+        return while_v2.while_loop(Cond, Body, [0.])
+
+    F()
+
+  @test_util.run_deprecated_v1  # Need to pass RunMetadata.
+  def testDisableLowering(self):
+    old = control_flow_util_v2._DISABLE_LOWER_USING_SWITCH_MERGE
+    control_flow_util_v2._DISABLE_LOWER_USING_SWITCH_MERGE = True
+    with self.session() as sess:
+      x = constant_op.constant(2.)
+      ret = while_loop_v2(
+          lambda v: v < 8., lambda v: v * v, [x], return_same_structure=False)
+
+      opts = config_pb2.RunOptions(trace_level=config_pb2.RunOptions.FULL_TRACE)
+      run_metadata = config_pb2.RunMetadata()
+      self.assertEqual(sess.run(ret, options=opts, run_metadata=run_metadata),
+                       16)
+      for dev_stat in run_metadata.step_stats.dev_stats:
+        for ns in dev_stat.node_stats:
+          self.assertNotIn("switch", ns.node_name)
+    control_flow_util_v2._DISABLE_LOWER_USING_SWITCH_MERGE = old
+
+  def _runBasicWithConfig(self, config):
+    with ops.device("/cpu:0"):
+      x = constant_op.constant(0)
+      ret, = while_loop_v2(lambda x: x < 1000, lambda x: x + 1, [x])
+    with self.cached_session(config=config):
+      self.assertEqual(1000, self.evaluate(ret))
+
+  @test_util.run_deprecated_v1
+  def testRunKernelsInline(self):
+    config = config_pb2.ConfigProto()
+    config.inter_op_parallelism_threads = -1
+    self._runBasicWithConfig(config)
+
+  @test_util.run_deprecated_v1
+  def testSingleThreadedExecution(self):
+    config = config_pb2.ConfigProto()
+    config.experimental.executor_type = "SINGLE_THREADED_EXECUTOR"
+    self._runBasicWithConfig(config)
 
 
 def ScalarShape():

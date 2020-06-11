@@ -88,12 +88,12 @@ cc_library(
     ],
     hdrs = ["src/nccl.h"],
     include_prefix = "third_party/nccl",
+    linkopts = ["-lrt"],
     strip_include_prefix = "src",
     visibility = ["//visibility:public"],
     deps = [
         ":device",
         ":include_hdrs",
         ":src_hdrs",
-        "@local_config_cuda//cuda:cudart_static",
     ],
 )

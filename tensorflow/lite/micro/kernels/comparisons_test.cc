@@ -17,7 +17,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
 #include "tensorflow/lite/micro/testing/test_utils.h"
 
@@ -34,10 +34,10 @@ void TestComparison(tflite::BuiltinOperator op, TfLiteTensor* tensors,
   const int output_dims_count = ElementCount(*tensors[inputs_size].dims);
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
-  const TfLiteRegistration* registration = resolver.FindOp(op, 1);
+  ::tflite::AllOpsResolver resolver;
+  const TfLiteRegistration* registration = resolver.FindOp(op);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const int inputs_array_data[] = {2, 0, 1};

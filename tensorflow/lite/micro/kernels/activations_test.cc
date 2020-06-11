@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/micro/kernels/all_ops_resolver.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/testing/micro_test.h"
 #include "tensorflow/lite/micro/testing/test_utils.h"
 
@@ -39,11 +39,11 @@ void TestReluFloat(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;
@@ -95,11 +95,11 @@ void TestRelu6Float(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU6, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU6);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;
@@ -156,11 +156,11 @@ void TestReluUint8(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;
@@ -221,11 +221,11 @@ void TestRelu6Uint8(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU6, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU6);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;
@@ -285,11 +285,11 @@ void TestReluInt8(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;
@@ -351,11 +351,11 @@ void TestRelu6Int8(const int* input_dims_data, const float* input_data,
   };
 
   TfLiteContext context;
-  PopulateContext(tensors, tensors_size, &context);
+  PopulateContext(tensors, tensors_size, micro_test::reporter, &context);
 
-  ::tflite::ops::micro::AllOpsResolver resolver;
+  ::tflite::AllOpsResolver resolver;
   const TfLiteRegistration* registration =
-      resolver.FindOp(tflite::BuiltinOperator_RELU6, 1);
+      resolver.FindOp(tflite::BuiltinOperator_RELU6);
   TF_LITE_MICRO_EXPECT_NE(nullptr, registration);
 
   const char* init_data = nullptr;

@@ -50,7 +50,7 @@ struct AllocRecord {
   // Holds a representation of the stack at the time the associated buffer was
   // allocated. Produced in a form described in
   // //util/symbolize/symbolized_stacktrace.h.
-  string stack_trace;
+  std::string stack_trace;
 };
 
 // Forward declaration of private friend class.
@@ -175,12 +175,12 @@ class StreamExecutor {
   // If `module_handle` is set then searches only within the module
   // corresponding to `module_handle`.
   template <typename T>
-  port::StatusOr<DeviceMemory<T>> GetSymbol(const string &symbol_name,
+  port::StatusOr<DeviceMemory<T>> GetSymbol(const std::string &symbol_name,
                                             ModuleHandle module_handle = {});
 
   // An untyped version of GetSymbol.
   port::StatusOr<DeviceMemoryBase> GetUntypedSymbol(
-      const string &symbol_name, ModuleHandle module_handle = {});
+      const std::string &symbol_name, ModuleHandle module_handle = {});
 
   // Deallocate the DeviceMemory previously allocated via this interface.
   // Deallocation of a nullptr-representative value is permitted.
@@ -376,11 +376,14 @@ class StreamExecutor {
   // Returns the list of supported algorithms for the forward convolution
   // operation.
   bool GetMIOpenConvolveAlgorithms(
-      dnn::ConvolutionKind kind, Stream *stream, dnn::DataType element_type,
-      const dnn::BatchDescriptor &input_descriptor,
+      dnn::ConvolutionKind kind, dnn::DataType element_type, Stream *stream,
+      const dnn::BatchDescriptor &input_descriptor, DeviceMemoryBase input_data,
       const dnn::FilterDescriptor &filter_descriptor,
-      const dnn::ConvolutionDescriptor &convolution_descriptor,
+      DeviceMemoryBase filter_data,
       const dnn::BatchDescriptor &output_descriptor,
+      DeviceMemoryBase output_data,
+      const dnn::ConvolutionDescriptor &convolution_descriptor,
+      ScratchAllocator *scratch_allocator,
       std::vector<dnn::ProfileResult> *out_algorithms);
 
   // Returns the list of supported algorithms for rnn operation.
@@ -554,7 +557,7 @@ class StreamExecutor {
 
   // Finds and retrieves device memory for the symbol on the underlying
   // platform.
-  bool GetSymbol(const string &symbol_name, ModuleHandle module_handle,
+  bool GetSymbol(const std::string &symbol_name, ModuleHandle module_handle,
                  void **mem, size_t *bytes);
 
   // Entrains a memcpy operation onto stream, with a host destination location
@@ -667,15 +670,15 @@ class StreamExecutor {
   // A mapping of pointer (to device memory) to string representation of the
   // stack (of the allocating thread) at the time at which the pointer was
   // allocated.
-  std::map<void *, AllocRecord> mem_allocs_ GUARDED_BY(mu_);
+  std::map<void *, AllocRecord> mem_allocs_ TF_GUARDED_BY(mu_);
 
   // Memoized BLAS support object -- we only want to create this once when asked
   // for a BLAS interface.
-  std::unique_ptr<blas::BlasSupport> blas_ GUARDED_BY(mu_);
+  std::unique_ptr<blas::BlasSupport> blas_ TF_GUARDED_BY(mu_);
 
   // Memoized DNN support object -- we only want to create this once when asked
   // for an DNN interface.
-  std::unique_ptr<dnn::DnnSupport> dnn_ GUARDED_BY(mu_);
+  std::unique_ptr<dnn::DnnSupport> dnn_ TF_GUARDED_BY(mu_);
 
   // Memoized FFT support object -- we only want to create this once when asked
   // for a FFT interface.
@@ -683,12 +686,12 @@ class StreamExecutor {
 
   // Memoized RNG support object -- we only want to create this once when asked
   // for an RNG interface.
-  std::unique_ptr<rng::RngSupport> rng_ GUARDED_BY(mu_);
+  std::unique_ptr<rng::RngSupport> rng_ TF_GUARDED_BY(mu_);
 
   // Slot to cache the owned DeviceDescription for the underlying device
   // once it has been queried from DeviceDescription().
   mutable std::unique_ptr<DeviceDescription> device_description_
-      GUARDED_BY(mu_);
+      TF_GUARDED_BY(mu_);
 
   // The kind of the underlying platform that is being targeted, as passed
   // during construction.
@@ -720,13 +723,13 @@ class StreamExecutor {
 
   // Only one worker thread is needed; little work will be done by the
   // executor.
-  static const int kNumBackgroundThreads = 1;
+  static constexpr int kNumBackgroundThreads = 1;
 
   // Indicates if StreamExecutor operation tracing should be performed.
   bool tracing_enabled_;
 
   // The set of TraceListeners registered for this StreamExecutor.
-  std::set<TraceListener*> listeners_ GUARDED_BY(mu_);
+  std::set<TraceListener *> listeners_ TF_GUARDED_BY(mu_);
 
   // Allocated memory in bytes.
   int64 mem_alloc_bytes_;
@@ -805,7 +808,7 @@ inline DeviceMemory<T> StreamExecutor::AllocateArray(uint64 element_count,
 
 template <typename T>
 inline port::StatusOr<DeviceMemory<T>> StreamExecutor::GetSymbol(
-    const string &symbol_name, ModuleHandle module_handle) {
+    const std::string &symbol_name, ModuleHandle module_handle) {
   port::StatusOr<DeviceMemoryBase> untyped_symbol =
       GetUntypedSymbol(symbol_name, module_handle);
   if (!untyped_symbol.ok()) {

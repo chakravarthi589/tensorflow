@@ -50,7 +50,6 @@ def _single_identity_op_at_end():
   inputs = keras.Input(shape=(10,))
   x = keras.layers.Dense(10)(inputs)
   outputs = array_ops.identity(x)
-  assert 'Identity' in outputs.name
   return keras.Model(inputs, outputs)
 
 
@@ -186,7 +185,7 @@ def _reuse_ancillary_layer():
   return model
 
 
-@keras_parameterized.run_all_keras_modes
+@keras_parameterized.run_all_keras_modes(skip_keras_tensors=True)
 class AutoLambdaTest(keras_parameterized.TestCase):
 
   @parameterized.named_parameters(
@@ -211,8 +210,7 @@ class AutoLambdaTest(keras_parameterized.TestCase):
     model.compile(
         adam.Adam(0.001),
         'mse',
-        run_eagerly=testing_utils.should_run_eagerly(),
-        experimental_run_tf_function=testing_utils.should_run_tf_function())
+        run_eagerly=testing_utils.should_run_eagerly())
 
     np_inputs = nest.map_structure(
         lambda x: np.ones((10,) + tuple(x.shape[1:]), 'float32'), model.inputs)
@@ -230,8 +228,7 @@ class AutoLambdaTest(keras_parameterized.TestCase):
     new_model.compile(
         adam.Adam(0.001),
         'mse',
-        run_eagerly=testing_utils.should_run_eagerly(),
-        experimental_run_tf_function=testing_utils.should_run_tf_function())
+        run_eagerly=testing_utils.should_run_eagerly())
     new_model.fit(np_inputs, np_outputs, batch_size=2)
     new_model(np_inputs)  # Test calling the new model directly on inputs.
     # Assert that metrics are preserved and in the right order.
@@ -290,9 +287,10 @@ class AutoLambdaTest(keras_parameterized.TestCase):
                         constant_op.constant(40.0, shape=(1, 1)))
 
   def test_no_tracking(self):
-    x = keras.backend.placeholder((10, 10))
-    keras.layers.Dense(1)(x)
-    self.assertTrue(x._keras_history_checked)
+    if not context.executing_eagerly():
+      x = constant_op.constant(1.0, shape=(10, 10))
+      keras.layers.Dense(1)(x)
+      self.assertTrue(x._keras_history_checked)
 
   def test_timing_scales_linearly(self):
 
@@ -313,11 +311,6 @@ class AutoLambdaTest(keras_parameterized.TestCase):
     # Check construction time grows approx. linearly with size.
     e = 3  # Fudge factor to prevent flakiness.
     self.assertLess(size_500, (10 * e) * size_50)
-
-  def test_no_mask_tracking(self):
-    x = keras.backend.placeholder((10, 10))
-    y = keras.layers.Masking(0.)(x)
-    self.assertTrue(y._keras_mask._keras_history_checked)
 
   def test_built(self):
     inputs = keras.Input(shape=(10,))

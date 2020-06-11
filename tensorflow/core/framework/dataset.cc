@@ -228,7 +228,7 @@ Status GraphDefBuilderWrapper::AddDataset(
     opts.reset(new GraphDefBuilder::Options(
         opts->WithAttr("output_types", dataset->output_dtypes())));
   }
-  for (auto attr : attrs) {
+  for (const auto& attr : attrs) {
     opts.reset(
         new GraphDefBuilder::Options(opts->WithAttr(attr.first, attr.second)));
   }
@@ -336,8 +336,7 @@ bool GraphDefBuilderWrapper::HasAttr(const string& name,
 }
 
 Status IteratorBase::InitializeBase(IteratorContext* ctx,
-                                    const IteratorBase* parent,
-                                    const string& output_prefix) {
+                                    const IteratorBase* parent) {
   parent_ = parent;
   id_ =
       Hash64CombineUnordered(Hash64(prefix()), reinterpret_cast<uint64>(this));
@@ -349,9 +348,8 @@ Status IteratorBase::InitializeBase(IteratorContext* ctx,
     auto factory = [ctx, this](model::Node::Args args) {
       return CreateNode(ctx, std::move(args));
     };
-    model->AddNode(std::move(factory), prefix(), output_prefix, &node_);
-    cleanup_fns_.push_back(
-        [model, prefix = prefix()]() { model->RemoveNode(prefix); });
+    model->AddNode(std::move(factory), prefix(), parent->model_node(), &node_);
+    cleanup_fns_.push_back([this, model]() { model->RemoveNode(node_); });
   }
   return Status::OK();
 }
@@ -418,7 +416,7 @@ Status DatasetBase::MakeIterator(
     const string& output_prefix,
     std::unique_ptr<IteratorBase>* iterator) const {
   *iterator = MakeIteratorInternal(output_prefix);
-  Status s = (*iterator)->InitializeBase(ctx, parent, output_prefix);
+  Status s = (*iterator)->InitializeBase(ctx, parent);
   if (s.ok()) {
     s.Update((*iterator)->Initialize(ctx));
   }
@@ -482,9 +480,10 @@ Status DatasetBaseIterator::GetNext(IteratorContext* ctx,
   profiler::TraceMe activity([&] { return BuildTraceMeName(); },
                              profiler::TraceMeLevel::kInfo);
   DVLOG(3) << prefix() << " GetNext enter";
+  RecordInput(ctx);
   RecordStart(ctx, /*stop_output=*/true);
   Status s = GetNextInternal(ctx, out_tensors, end_of_sequence);
-  if (s.ok() && !*end_of_sequence) RecordElement(ctx);
+  if (s.ok() && !*end_of_sequence) RecordElement(ctx, out_tensors);
   RecordStop(ctx, /*start_output=*/true);
   if (TF_PREDICT_FALSE(errors::IsOutOfRange(s))) {
     s = errors::Internal("Iterator \"", params_.prefix,
@@ -506,6 +505,10 @@ void DatasetOpKernel::Compute(OpKernelContext* ctx) {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output));
     OP_REQUIRES_OK(ctx, StoreDatasetInVariantTensor(dataset, output));
   }
+}
+
+string DatasetOpKernel::TraceString(OpKernelContext* ctx, bool verbose) {
+  return strings::StrCat(name_view(), ":", type_string_view());
 }
 
 // static
@@ -571,8 +574,7 @@ void BackgroundWorker::Schedule(std::function<void()> work_item) {
 }
 
 void BackgroundWorker::WorkerLoop() {
-  tensorflow::ResourceTagger tag =
-      tensorflow::ResourceTagger(kTFDataResourceTag, "Background");
+  tensorflow::ResourceTagger tag(kTFDataResourceTag, "Background");
   while (true) {
     std::function<void()> work_item = nullptr;
     {
@@ -609,8 +611,7 @@ namespace {
 class RunnerImpl : public Runner {
  public:
   void Run(const std::function<void()>& f) override {
-    tensorflow::ResourceTagger tag =
-        tensorflow::ResourceTagger(kTFDataResourceTag, "Runner");
+    tensorflow::ResourceTagger tag(kTFDataResourceTag, "Runner");
     f();
 
     // NOTE: We invoke a virtual function to prevent `f` being tail-called, and

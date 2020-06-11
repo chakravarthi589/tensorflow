@@ -15,9 +15,20 @@ limitations under the License.
 
 #include "tensorflow/lite/micro/test_helpers.h"
 
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <new>
+
+#include "flatbuffers/flatbuffers.h"  // from @flatbuffers
 #include "tensorflow/lite/c/common.h"
-#include "tensorflow/lite/core/api/tensor_utils.h"
+#include "tensorflow/lite/core/api/error_reporter.h"
+#include "tensorflow/lite/kernels/internal/compatibility.h"
+#include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
+#include "tensorflow/lite/kernels/kernel_util.h"
 #include "tensorflow/lite/micro/micro_utils.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 
 namespace tflite {
 namespace testing {
@@ -28,10 +39,7 @@ class StackAllocator : public flatbuffers::Allocator {
   StackAllocator() : data_(data_backing_), data_size_(0) {}
 
   uint8_t* allocate(size_t size) override {
-    if ((data_size_ + size) > kStackAllocatorSize) {
-      // TODO(petewarden): Add error reporting beyond returning null!
-      return nullptr;
-    }
+    TFLITE_DCHECK((data_size_ + size) <= kStackAllocatorSize);
     uint8_t* result = data_;
     data_ += size;
     data_size_ += size;
@@ -61,6 +69,185 @@ flatbuffers::FlatBufferBuilder* BuilderInstance() {
       new (inst_memory) flatbuffers::FlatBufferBuilder(
           StackAllocator::kStackAllocatorSize, &StackAllocator::instance());
   return inst;
+}
+
+// A wrapper around FlatBuffer API to help build model easily.
+class ModelBuilder {
+ public:
+  typedef int32_t Tensor;
+  typedef int Operator;
+  typedef int Node;
+
+  // `builder` needs to be available until BuildModel is called.
+  explicit ModelBuilder(flatbuffers::FlatBufferBuilder* builder)
+      : builder_(builder) {}
+
+  // Registers an operator that will be used in the model.
+  Operator RegisterOp(BuiltinOperator op, const char* custom_code,
+                      int32_t version);
+
+  // Adds a tensor to the model.
+  Tensor AddTensor(TensorType type, std::initializer_list<int32_t> shape) {
+    return AddTensorImpl(type, /* is_variable */ false, shape);
+  }
+
+  // Adds a variable tensor to the model.
+  Tensor AddVariableTensor(TensorType type,
+                           std::initializer_list<int32_t> shape) {
+    return AddTensorImpl(type, /* is_variable */ true, shape);
+  }
+
+  // Adds a node to the model with given input and output Tensors.
+  Node AddNode(Operator op, std::initializer_list<Tensor> inputs,
+               std::initializer_list<Tensor> outputs);
+
+  // Constructs the flatbuffer model using `builder_` and return a pointer to
+  // it. The returned model has the same lifetime as `builder_`.
+  const Model* BuildModel(std::initializer_list<Tensor> inputs,
+                          std::initializer_list<Tensor> outputs);
+
+ private:
+  // Adds a tensor to the model.
+  Tensor AddTensorImpl(TensorType type, bool is_variable,
+                       std::initializer_list<int32_t> shape);
+
+  flatbuffers::FlatBufferBuilder* builder_;
+
+  static constexpr int kMaxOperatorCodes = 10;
+  flatbuffers::Offset<tflite::OperatorCode> operator_codes_[kMaxOperatorCodes];
+  int next_operator_code_id_ = 0;
+
+  static constexpr int kMaxOperators = 50;
+  flatbuffers::Offset<tflite::Operator> operators_[kMaxOperators];
+  int next_operator_id_ = 0;
+
+  static constexpr int kMaxTensors = 50;
+  flatbuffers::Offset<tflite::Tensor> tensors_[kMaxTensors];
+  int next_tensor_id_ = 0;
+};
+
+ModelBuilder::Operator ModelBuilder::RegisterOp(BuiltinOperator op,
+                                                const char* custom_code,
+                                                int32_t version) {
+  TFLITE_DCHECK(next_operator_code_id_ <= kMaxOperatorCodes);
+  operator_codes_[next_operator_code_id_] =
+      tflite::CreateOperatorCodeDirect(*builder_, op, custom_code, version);
+  next_operator_code_id_++;
+  return next_operator_code_id_ - 1;
+}
+
+ModelBuilder::Node ModelBuilder::AddNode(
+    ModelBuilder::Operator op,
+    std::initializer_list<ModelBuilder::Tensor> inputs,
+    std::initializer_list<ModelBuilder::Tensor> outputs) {
+  TFLITE_DCHECK(next_operator_id_ <= kMaxOperators);
+  operators_[next_operator_id_] = tflite::CreateOperator(
+      *builder_, op, builder_->CreateVector(inputs.begin(), inputs.size()),
+      builder_->CreateVector(outputs.begin(), outputs.size()),
+      BuiltinOptions_NONE);
+  next_operator_id_++;
+  return next_operator_id_ - 1;
+}
+
+const Model* ModelBuilder::BuildModel(
+    std::initializer_list<ModelBuilder::Tensor> inputs,
+    std::initializer_list<ModelBuilder::Tensor> outputs) {
+  // Model schema requires an empty buffer at idx 0.
+  constexpr size_t kBufferSize = 1;
+  const flatbuffers::Offset<Buffer> buffers[kBufferSize] = {
+      tflite::CreateBuffer(*builder_)};
+
+  // TFLM only supports single subgraph.
+  constexpr size_t subgraphs_size = 1;
+  const flatbuffers::Offset<SubGraph> subgraphs[subgraphs_size] = {
+      tflite::CreateSubGraph(
+          *builder_, builder_->CreateVector(tensors_, next_tensor_id_),
+          builder_->CreateVector(inputs.begin(), inputs.size()),
+          builder_->CreateVector(outputs.begin(), outputs.size()),
+          builder_->CreateVector(operators_, next_operator_id_),
+          builder_->CreateString("test_subgraph"))};
+  const flatbuffers::Offset<Model> model_offset = tflite::CreateModel(
+      *builder_, 0,
+      builder_->CreateVector(operator_codes_, next_operator_code_id_),
+      builder_->CreateVector(subgraphs, subgraphs_size),
+      builder_->CreateString("teset_model"),
+      builder_->CreateVector(buffers, kBufferSize));
+  tflite::FinishModelBuffer(*builder_, model_offset);
+  void* model_pointer = builder_->GetBufferPointer();
+  const Model* model = flatbuffers::GetRoot<Model>(model_pointer);
+  return model;
+}
+
+ModelBuilder::Tensor ModelBuilder::AddTensorImpl(
+    TensorType type, bool is_variable, std::initializer_list<int32_t> shape) {
+  TFLITE_DCHECK(next_tensor_id_ <= kMaxTensors);
+  tensors_[next_tensor_id_] = tflite::CreateTensor(
+      *builder_, builder_->CreateVector(shape.begin(), shape.size()), type,
+      /* buffer */ 0, /* name */ 0, /* quantization */ 0,
+      /* is_variable */ is_variable,
+      /* sparsity */ 0);
+  next_tensor_id_++;
+  return next_tensor_id_ - 1;
+}
+
+const Model* BuildSimpleStatefulModel() {
+  using flatbuffers::Offset;
+  flatbuffers::FlatBufferBuilder* fb_builder = BuilderInstance();
+
+  ModelBuilder model_builder(fb_builder);
+
+  const int op_id =
+      model_builder.RegisterOp(BuiltinOperator_CUSTOM, "simple_stateful_op", 0);
+  const int input_tensor = model_builder.AddTensor(TensorType_UINT8, {3});
+  const int median_tensor = model_builder.AddTensor(TensorType_UINT8, {3});
+  const int invoke_count_tensor =
+      model_builder.AddTensor(TensorType_INT32, {1});
+
+  model_builder.AddNode(op_id, {input_tensor},
+                        {median_tensor, invoke_count_tensor});
+  return model_builder.BuildModel({input_tensor},
+                                  {median_tensor, invoke_count_tensor});
+}
+
+const Model* BuildSimpleModelWithBranch() {
+  using flatbuffers::Offset;
+  flatbuffers::FlatBufferBuilder* fb_builder = BuilderInstance();
+
+  ModelBuilder model_builder(fb_builder);
+  /* Model structure
+           | t0
+    +------|
+    |      v
+    |   +---------+
+    |   |   n0    |
+    |   |         |
+    |   +---------+
+    v           +
+                |
+  +---------+   | t1
+  |   n1    |   |
+  |         |   |
+  +---------+   |
+     |          |
+ t2  |          v
+     |   +---------+
+     +-->|    n2   |
+         |         |
+         +-------|-+
+                 |t3
+                 v
+  */
+  const int op_id =
+      model_builder.RegisterOp(BuiltinOperator_CUSTOM, "mock_custom",
+                               /* version= */ 0);
+  const int t0 = model_builder.AddTensor(TensorType_FLOAT32, {2, 2, 3});
+  const int t1 = model_builder.AddTensor(TensorType_FLOAT32, {2, 2, 3});
+  const int t2 = model_builder.AddTensor(TensorType_FLOAT32, {2, 2, 3});
+  const int t3 = model_builder.AddTensor(TensorType_FLOAT32, {2, 2, 3});
+  model_builder.AddNode(op_id, {t0}, {t1});      // n0
+  model_builder.AddNode(op_id, {t0}, {t2});      // n1
+  model_builder.AddNode(op_id, {t1, t2}, {t3});  // n2
+  return model_builder.BuildModel({t0}, {t3});
 }
 
 const Model* BuildSimpleMockModel() {
@@ -292,6 +479,141 @@ const Model* BuildComplexMockModel() {
 
 }  // namespace
 
+const TfLiteRegistration* SimpleStatefulOp::getRegistration() {
+  static TfLiteRegistration r;
+  r.init = Init;
+  r.prepare = Prepare;
+  r.invoke = Invoke;
+  return &r;
+}
+
+void* SimpleStatefulOp::Init(TfLiteContext* context, const char* buffer,
+                             size_t length) {
+  TFLITE_DCHECK(context->AllocateBufferForEval == nullptr);
+  TFLITE_DCHECK(context->GetScratchBuffer == nullptr);
+  TFLITE_DCHECK(context->RequestScratchBufferInArena == nullptr);
+
+  void* raw;
+  TFLITE_DCHECK(context->AllocatePersistentBuffer(context, sizeof(OpData),
+                                                  &raw) == kTfLiteOk);
+  OpData* data = reinterpret_cast<OpData*>(raw);
+  *data = {};
+  return raw;
+}
+
+TfLiteStatus SimpleStatefulOp::Prepare(TfLiteContext* context,
+                                       TfLiteNode* node) {
+  OpData* data = reinterpret_cast<OpData*>(node->user_data);
+
+  // Make sure that the input is in uint8 with at least 1 data entry.
+  const TfLiteTensor* input = tflite::GetInput(context, node, kInputTensor);
+  if (input->type != kTfLiteUInt8) return kTfLiteError;
+  if (NumElements(input->dims) == 0) return kTfLiteError;
+
+  // Allocate a temporary buffer with the same size of input for sorting.
+  TF_LITE_ENSURE_STATUS(context->RequestScratchBufferInArena(
+      context, sizeof(uint8_t) * NumElements(input->dims),
+      &data->sorting_buffer));
+  return kTfLiteOk;
+}
+
+TfLiteStatus SimpleStatefulOp::Invoke(TfLiteContext* context,
+                                      TfLiteNode* node) {
+  OpData* data = reinterpret_cast<OpData*>(node->user_data);
+  data->invoke_count += 1;
+
+  const TfLiteTensor* input = GetInput(context, node, kInputTensor);
+  const uint8_t* input_data = GetTensorData<uint8_t>(input);
+  int size = NumElements(input->dims);
+
+  uint8_t* sorting_buffer = reinterpret_cast<uint8_t*>(
+      context->GetScratchBuffer(context, data->sorting_buffer));
+  // Copy inputs data to the sorting buffer. We don't want to mutate the input
+  // tensor as it might be used by a another node.
+  for (int i = 0; i < size; i++) {
+    sorting_buffer[i] = input_data[i];
+  }
+
+  // In place insertion sort on `sorting_buffer`.
+  for (int i = 1; i < size; i++) {
+    for (int j = i; j > 0 && sorting_buffer[j] < sorting_buffer[j - 1]; j--) {
+      std::swap(sorting_buffer[j], sorting_buffer[j - 1]);
+    }
+  }
+
+  TfLiteTensor* median = GetOutput(context, node, kMedianTensor);
+  uint8_t* median_data = GetTensorData<uint8_t>(median);
+  TfLiteTensor* invoke_count = GetOutput(context, node, kInvokeCount);
+  int32_t* invoke_count_data = GetTensorData<int32_t>(invoke_count);
+
+  median_data[0] = sorting_buffer[size / 2];
+  invoke_count_data[0] = data->invoke_count;
+  return kTfLiteOk;
+}
+
+const TfLiteRegistration* MockCustom::getRegistration() {
+  static TfLiteRegistration r;
+  r.init = Init;
+  r.prepare = Prepare;
+  r.invoke = Invoke;
+  r.free = Free;
+  return &r;
+}
+
+void* MockCustom::Init(TfLiteContext* context, const char* buffer,
+                       size_t length) {
+  // We don't support delegate in TFL micro. This is a weak check to test if
+  // context struct being zero-initialized.
+  TFLITE_DCHECK(context->ReplaceNodeSubsetsWithDelegateKernels == nullptr);
+  freed_ = false;
+  // Do nothing.
+  return nullptr;
+}
+
+void MockCustom::Free(TfLiteContext* context, void* buffer) { freed_ = true; }
+
+TfLiteStatus MockCustom::Prepare(TfLiteContext* context, TfLiteNode* node) {
+  return kTfLiteOk;
+}
+
+TfLiteStatus MockCustom::Invoke(TfLiteContext* context, TfLiteNode* node) {
+  const TfLiteTensor* input = tflite::GetInput(context, node, 0);
+  const int32_t* input_data = input->data.i32;
+  const TfLiteTensor* weight = tflite::GetInput(context, node, 1);
+  const uint8_t* weight_data = weight->data.uint8;
+  TfLiteTensor* output = GetOutput(context, node, 0);
+  int32_t* output_data = output->data.i32;
+  output_data[0] =
+      0;  // Catch output tensor sharing memory with an input tensor
+  output_data[0] = input_data[0] + weight_data[0];
+  return kTfLiteOk;
+}
+
+bool MockCustom::freed_ = false;
+
+const TfLiteRegistration* MockOpResolver::FindOp(BuiltinOperator op) const {
+  return nullptr;
+}
+
+const TfLiteRegistration* MockOpResolver::FindOp(const char* op) const {
+  if (strcmp(op, "mock_custom") == 0) {
+    return MockCustom::getRegistration();
+  } else if (strcmp(op, "simple_stateful_op") == 0) {
+    return SimpleStatefulOp::getRegistration();
+  } else {
+    return nullptr;
+  }
+}
+
+MicroOpResolver::BuiltinParseFunction MockOpResolver::GetOpDataParser(
+    tflite::BuiltinOperator) const {
+  // TODO(b/149408647): Figure out an alternative so that we do not have any
+  // references to ParseOpData in the micro code and the signature for
+  // MicroOpResolver::BuiltinParseFunction can be changed to be different from
+  // ParseOpData.
+  return ParseOpData;
+}
+
 const Model* GetSimpleMockModel() {
   static Model* model = nullptr;
   if (!model) {
@@ -304,6 +626,22 @@ const Model* GetComplexMockModel() {
   static Model* model = nullptr;
   if (!model) {
     model = const_cast<Model*>(BuildComplexMockModel());
+  }
+  return model;
+}
+
+const Model* GetSimpleModelWithBranch() {
+  static Model* model = nullptr;
+  if (!model) {
+    model = const_cast<Model*>(BuildSimpleModelWithBranch());
+  }
+  return model;
+}
+
+const Model* GetSimpleStatefulModel() {
+  static Model* model = nullptr;
+  if (!model) {
+    model = const_cast<Model*>(BuildSimpleStatefulModel());
   }
   return model;
 }
@@ -480,17 +818,6 @@ TfLiteTensor CreateQuantizedTensor(const uint8_t* data, TfLiteIntArray* dims,
   return result;
 }
 
-// Create Quantized tensor which contains a quantized version of the supplied
-// buffer.
-TfLiteTensor CreateQuantizedTensor(const float* input, uint8_t* quantized,
-                                   TfLiteIntArray* dims, float scale,
-                                   int zero_point, const char* name,
-                                   bool is_variable) {
-  int input_size = ElementCount(*dims);
-  tflite::AsymmetricQuantize(input, quantized, input_size, scale, zero_point);
-  return CreateQuantizedTensor(quantized, dims, scale, zero_point, name);
-}
-
 TfLiteTensor CreateQuantizedTensor(const int8_t* data, TfLiteIntArray* dims,
                                    float scale, int zero_point,
                                    const char* name, bool is_variable) {
@@ -513,15 +840,6 @@ TfLiteTensor CreateQuantizedTensor(const int16_t* data, TfLiteIntArray* dims,
   result.quantization = {kTfLiteAffineQuantization, nullptr};
   result.bytes = ElementCount(*dims) * sizeof(int16_t);
   return result;
-}
-
-TfLiteTensor CreateQuantizedTensor(const float* input, int8_t* quantized,
-                                   TfLiteIntArray* dims, float scale,
-                                   int zero_point, const char* name,
-                                   bool is_variable) {
-  int input_size = ElementCount(*dims);
-  tflite::AsymmetricQuantize(input, quantized, input_size, scale, zero_point);
-  return CreateQuantizedTensor(quantized, dims, scale, zero_point, name);
 }
 
 TfLiteTensor CreateQuantized32Tensor(const int32_t* data, TfLiteIntArray* dims,
