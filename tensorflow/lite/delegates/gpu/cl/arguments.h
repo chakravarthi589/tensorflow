@@ -20,6 +20,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "tensorflow/lite/delegates/gpu/cl/cl_device.h"
 #include "tensorflow/lite/delegates/gpu/cl/gpu_object.h"
 #include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
 #include "tensorflow/lite/delegates/gpu/cl/util.h"
@@ -45,11 +46,14 @@ class Arguments {
   void AddImage3D(const std::string& name, const GPUImage3DDescriptor& desc);
   void AddImageBuffer(const std::string& name,
                       const GPUImageBufferDescriptor& desc);
+  void AddCustomMemory(const std::string& name,
+                       const GPUCustomMemoryDescriptor& desc);
 
   void AddObjectRef(const std::string& name, AccessType access_type,
                     GPUObjectDescriptorPtr&& descriptor_ptr);
   void AddObject(const std::string& name, AccessType access_type,
-                 GPUObjectPtr&& object);
+                 GPUObjectPtr&& object,
+                 GPUObjectDescriptorPtr&& descriptor_ptr);
 
   absl::Status SetInt(const std::string& name, int value);
   absl::Status SetFloat(const std::string& name, float value);
@@ -59,6 +63,7 @@ class Arguments {
   absl::Status SetImage2DArray(const std::string& name, cl_mem memory);
   absl::Status SetImage3D(const std::string& name, cl_mem memory);
   absl::Status SetImageBuffer(const std::string& name, cl_mem memory);
+  absl::Status SetCustomMemory(const std::string& name, cl_mem memory);
   absl::Status SetObjectRef(const std::string& name, const GPUObject* object);
 
   std::string GetListOfArgs();
@@ -69,6 +74,7 @@ class Arguments {
   absl::Status Merge(Arguments&& args, const std::string& postfix);
 
   absl::Status TransformToCLCode(
+      const DeviceInfo& device_info,
       const std::map<std::string, std::string>& linkables, std::string* code);
 
   // Move only
@@ -78,7 +84,8 @@ class Arguments {
   Arguments& operator=(const Arguments&) = delete;
 
  private:
-  std::string AddActiveArgument(const std::string& arg_name);
+  std::string AddActiveArgument(const std::string& arg_name,
+                                bool use_f32_for_halfs);
   void AddGPUResources(const std::string& name, const GPUResources& resources);
 
   absl::Status SetGPUResources(const std::string& name,
@@ -86,7 +93,7 @@ class Arguments {
 
   absl::Status AddObjectArgs();
 
-  void ResolveArgsPass(std::string* code);
+  void ResolveArgsPass(const DeviceInfo& device_info, std::string* code);
   absl::Status ResolveSelectorsPass(
       const std::map<std::string, std::string>& linkables, std::string* code);
 
@@ -135,6 +142,9 @@ class Arguments {
     // to reduce amount of data transferred we adding this optimization
     bool active = false;
 
+    // some devices have issues with half parameters.
+    bool store_as_f32 = false;
+
     // offset to shared uniform storage.
     uint32_t offset = -1;
   };
@@ -146,16 +156,16 @@ class Arguments {
   std::map<std::string, GPUImage2DArrayDescriptor> image2d_arrays_;
   std::map<std::string, GPUImage3DDescriptor> images3d_;
   std::map<std::string, GPUImageBufferDescriptor> image_buffers_;
+  std::map<std::string, GPUCustomMemoryDescriptor> custom_memories_;
 
   struct ObjectRefArg {
-    AccessType access_type;
     GPUObjectDescriptorPtr descriptor;
   };
   std::map<std::string, ObjectRefArg> object_refs_;
 
   struct ObjectArg {
-    AccessType access_type;
     GPUObjectPtr obj_ptr;
+    GPUObjectDescriptorPtr descriptor;
   };
   std::map<std::string, ObjectArg> objects_;
 };

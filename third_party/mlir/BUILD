@@ -282,7 +282,7 @@ cc_library(
     deps = [
         ":AVX512IncGen",
         ":IR",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":VectorOps",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Support",
@@ -305,9 +305,9 @@ cc_library(
         ":IR",
         ":LLVMAVX512",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":Pass",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":Transforms",
         ":VectorOps",
@@ -489,7 +489,7 @@ cc_library(
         ":EDSC",
         ":IR",
         ":LoopLikeInterface",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         "@llvm-project//llvm:Support",
@@ -571,7 +571,7 @@ gentbl(
 )
 
 cc_library(
-    name = "AffineToStandardTransforms",
+    name = "AffineToStandard",
     srcs = glob([
         "lib/Conversion/AffineToStandard/*.cpp",
         "lib/Conversion/AffineToStandard/*.h",
@@ -589,6 +589,11 @@ cc_library(
         ":Transforms",
         ":VectorOps",
     ],
+)
+
+alias(
+    name = "AffineToStandardTransforms",
+    actual = "AffineToStandard",
 )
 
 # SDBM dialect only contains attribute components that can be constructed given
@@ -631,7 +636,7 @@ cc_library(
         ":IR",
         ":LoopLikeInterface",
         ":SCFIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         "@llvm-project//llvm:Support",
@@ -707,14 +712,8 @@ gentbl(
 
 cc_library(
     name = "Shape",
-    srcs = glob(
-        [
-            "lib/Dialect/Shape/IR/*.cpp",
-        ],
-    ),
-    hdrs = glob([
-        "include/mlir/Dialect/Shape/IR/*.h",
-    ]),
+    srcs = glob(["lib/Dialect/Shape/IR/*.cpp"]),
+    hdrs = ["include/mlir/Dialect/Shape/IR/Shape.h"],
     includes = ["include"],
     deps = [
         ":CallOpInterfaces",
@@ -725,7 +724,7 @@ cc_library(
         ":InferTypeOpInterface",
         ":MLIRShapeCanonicalizationIncGen",
         ":ShapeOpsIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":Support",
         "@llvm-project//llvm:Support",
     ],
@@ -737,22 +736,55 @@ cc_library(
         "lib/Conversion/ShapeToStandard/*.cpp",
         "lib/Conversion/ShapeToStandard/*.h",
     ]) + ["lib/Conversion/PassDetail.h"],
-    hdrs = glob([
-        "include/mlir/Conversion/ShapeToStandard/*.h",
-    ]),
+    hdrs = ["include/mlir/Conversion/ShapeToStandard/ShapeToStandard.h"],
     includes = ["include"],
     deps = [
-        ":Affine",
+        ":ConversionPassIncGen",
+        ":Pass",
+        ":SCFDialect",
+        ":Shape",
+        ":ShapeToStandardPatternsIncGen",
+        ":StandardOps",
+        ":Support",
+        ":Transforms",
+    ],
+)
+
+gentbl(
+    name = "ShapeToStandardPatternsIncGen",
+    strip_include_prefix = "include/mlir/Conversion/ShapeToStandard",
+    tbl_outs = [
+        (
+            "-gen-rewriters",
+            "include/mlir/Conversion/ShapeToStandard/ShapeToStandardPatterns.inc",
+        ),
+    ],
+    tblgen = ":mlir-tblgen",
+    td_file = "lib/Conversion/ShapeToStandard/ShapeToStandardPatterns.td",
+    td_srcs = [
+        ":StdOpsTdFiles",
+        "include/mlir/Dialect/Shape/IR/ShapeBase.td",
+        "include/mlir/Dialect/Shape/IR/ShapeOps.td",
+        "include/mlir/Interfaces/InferTypeOpInterface.td",
+    ],
+)
+
+cc_library(
+    name = "ShapeToSCF",
+    srcs = glob([
+        "lib/Conversion/ShapeToSCF/*.cpp",
+        "lib/Conversion/ShapeToSCF/*.h",
+    ]) + ["lib/Conversion/PassDetail.h"],
+    hdrs = ["include/mlir/Conversion/ShapeToSCF/ShapeToSCF.h"],
+    includes = ["include"],
+    deps = [
         ":ConversionPassIncGen",
         ":IR",
         ":Pass",
         ":SCFDialect",
         ":Shape",
         ":StandardOps",
-        ":Support",
         ":Transforms",
-        "@llvm-project//llvm:Core",
-        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -774,18 +806,15 @@ cc_library(
         "lib/Dialect/Shape/Transforms/*.cpp",
         "lib/Dialect/Shape/Transforms/*.h",
     ]),
-    hdrs = glob(["include/mlir/Dialect/Shape/Transforms/*.h"]),
+    hdrs = ["include/mlir/Dialect/Shape/Transforms/Passes.h"],
     includes = ["include"],
     deps = [
-        #":Analysis",
-        #":ControlFlowInterfaces",
         ":IR",
         ":Pass",
         ":Shape",
         ":ShapeTransformsPassIncGen",
         ":Support",
         ":Transforms",
-        #"@llvm-project//llvm:support",
     ],
 )
 
@@ -801,9 +830,7 @@ cc_library(
     hdrs = glob([
         "include/mlir/Dialect/StandardOps/IR/*.h",
         "include/mlir/Dialect/StandardOps/EDSC/*.h",
-    ]) + [
-        "include/mlir/Transforms/InliningUtils.h",
-    ],
+    ]) + ["include/mlir/Transforms/InliningUtils.h"],
     includes = ["include"],
     deps = [
         ":CallOpInterfaces",
@@ -811,7 +838,7 @@ cc_library(
         ":ControlFlowInterfaces",
         ":EDSC",
         ":IR",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOpsIncGen",
         ":Support",
         ":ViewLikeInterface",
@@ -873,7 +900,7 @@ cc_library(
         ":DialectUtils",
         ":EDSC",
         ":IR",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         ":VectorOpsIncGen",
@@ -1048,7 +1075,7 @@ cc_library(
         ":ControlFlowInterfaces",
         ":IR",
         ":LLVMOpsIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":Support",
         "@llvm-project//llvm:AsmParser",
         "@llvm-project//llvm:BitReader",
@@ -1171,7 +1198,7 @@ cc_library(
         ":GPUOpsIncGen",
         ":IR",
         ":LLVMDialect",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
     ],
@@ -1249,8 +1276,8 @@ cc_library(
         ":GPUDialect",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":StandardOps",
+        ":StandardToLLVM",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -1289,11 +1316,34 @@ cc_library(
         ":GPUToNVVMGen",
         ":GPUTransforms",
         ":IR",
-        ":LLVMTransforms",
         ":NVVMDialect",
         ":Pass",
+        ":StandardToLLVM",
         ":Transforms",
         "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "VectorToROCDL",
+    srcs = [
+        "lib/Conversion/PassDetail.h",
+        "lib/Conversion/VectorToROCDL/VectorToROCDL.cpp",
+    ],
+    hdrs = [
+        "include/mlir/Conversion/VectorToROCDL/VectorToROCDL.h",
+    ],
+    includes = ["include"],
+    deps = [
+        ":ConversionPassIncGen",
+        ":GPUDialect",
+        ":LLVMDialect",
+        ":Pass",
+        ":ROCDLDialect",
+        ":StandardOps",
+        ":StandardToLLVM",
+        ":Transforms",
+        ":VectorOps",
     ],
 )
 
@@ -1330,12 +1380,13 @@ cc_library(
         ":GPUDialect",
         ":GPUToROCDLTGen",
         ":GPUTransforms",
-        ":LLVMTransforms",
         ":Pass",
         ":ROCDLDialect",
+        ":StandardToLLVM",
         ":Transforms",
         ":VectorOps",
         ":VectorToLLVM",
+        ":VectorToROCDL",
         ":VectorToSCF",
         "@llvm-project//llvm:Support",
     ],
@@ -1429,7 +1480,7 @@ cc_library(
         ":SCFDialect",
         ":SPIRVDialect",
         ":SPIRVLowering",
-        ":StandardToSPIRVConversions",
+        ":StandardToSPIRVTransforms",
         ":Support",
         ":Transforms",
     ],
@@ -1450,12 +1501,13 @@ cc_library(
         ":ConversionPassIncGen",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":Pass",
         ":SPIRVDialect",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":Transforms",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -1528,7 +1580,7 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":NVVMOpsIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         "@llvm-project//llvm:AsmParser",
@@ -1600,7 +1652,7 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":ROCDLOpsIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         "@llvm-project//llvm:AsmParser",
@@ -1848,7 +1900,7 @@ cc_library(
         ":SPIRVOpsIncGen",
         ":SPIRVSerializationGen",
         ":SPIRVTargetAndABIStructGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":Support",
         ":Transforms",
         "@llvm-project//llvm:Support",
@@ -1901,7 +1953,7 @@ cc_library(
 )
 
 cc_library(
-    name = "StandardToSPIRVConversions",
+    name = "StandardToSPIRVTransforms",
     srcs = glob([
         "lib/Conversion/StandardToSPIRV/*.cpp",
         "lib/Conversion/StandardToSPIRV/*.h",
@@ -1922,8 +1974,14 @@ cc_library(
         ":StandardOps",
         ":Support",
         ":Transforms",
+        ":VectorOps",
         "@llvm-project//llvm:Support",
     ],
+)
+
+alias(
+    name = "StandardToSPIRVConversions",
+    actual = "StandardToSPIRVTransforms",
 )
 
 cc_library(
@@ -1987,7 +2045,7 @@ cc_library(
         ":IR",
         ":LoopLikeInterface",
         ":SCFDialect",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         "@llvm-project//llvm:Support",
@@ -2102,10 +2160,11 @@ cc_library(
         ":Analysis",
         ":ControlFlowInterfaces",
         ":IR",
+        ":LinalgOps",
         ":LoopLikeInterface",
         ":Pass",
         ":SCFDialect",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         ":TransformUtils",
@@ -2135,7 +2194,7 @@ cc_library(
     includes = ["include"],
     deps = [
         ":Affine",
-        ":AffineToStandardTransforms",
+        ":AffineToStandard",
         ":ConversionPassIncGen",
         ":GPUDialect",
         ":GPUTransforms",
@@ -2175,7 +2234,7 @@ cc_library(
 )
 
 cc_library(
-    name = "CFGTransforms",
+    name = "SCFToStandard",
     srcs = [
         "lib/Conversion/PassDetail.h",
         "lib/Conversion/SCFToStandard/SCFToStandard.cpp",
@@ -2197,8 +2256,13 @@ cc_library(
     ],
 )
 
+alias(
+    name = "CFGTransforms",
+    actual = "SCFToStandard",
+)
+
 cc_library(
-    name = "LLVMTransforms",
+    name = "StandardToLLVM",
     srcs = [
         "lib/Conversion/PassDetail.h",
         "lib/Conversion/StandardToLLVM/StandardToLLVM.cpp",
@@ -2220,6 +2284,11 @@ cc_library(
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Support",
     ],
+)
+
+alias(
+    name = "LLVMTransforms",
+    actual = "StandardToLLVM",
 )
 
 gentbl(
@@ -2354,7 +2423,7 @@ gentbl(
 )
 
 cc_library(
-    name = "SideEffects",
+    name = "SideEffectInterfaces",
     srcs = [
         "lib/Interfaces/SideEffectInterfaces.cpp",
     ],
@@ -2368,6 +2437,11 @@ cc_library(
         ":Support",
         "@llvm-project//llvm:Support",
     ],
+)
+
+alias(
+    name = "SideEffects",
+    actual = "SideEffectInterfaces",
 )
 
 cc_library(
@@ -2580,7 +2654,6 @@ cc_library(
         ":GPUTransforms",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":LinalgToLLVM",
         ":LinalgToSPIRV",
         ":LinalgToStandard",
@@ -2588,10 +2661,12 @@ cc_library(
         ":Parser",
         ":Pass",
         ":SCFTransforms",
+        ":ShapeToSCF",
         ":ShapeToStandard",
         ":ShapeTransforms",
         ":StandardOpsTransforms",
-        ":StandardToSPIRVConversions",
+        ":StandardToLLVM",
+        ":StandardToSPIRVTransforms",
         ":Support",
         ":Transforms",
         ":VectorToLLVM",
@@ -2651,7 +2726,6 @@ cc_library(
         ":Affine",
         ":AffinePassIncGen",
         ":AffineTransforms",
-        ":CFGTransforms",
         ":ConversionPassIncGen",
         ":GPUDialect",
         ":GPUPassIncGen",
@@ -2666,7 +2740,6 @@ cc_library(
         ":LLVMDialect",
         ":LLVMIRTransforms",
         ":LLVMPassIncGen",
-        ":LLVMTransforms",
         ":LinalgOps",
         ":LinalgPassIncGen",
         ":LinalgToLLVM",
@@ -2681,6 +2754,7 @@ cc_library(
         ":ROCDLDialect",
         ":SCFDialect",
         ":SCFToGPUPass",
+        ":SCFToStandard",
         ":SCFTransforms",
         ":SDBM",
         ":SPIRVDialect",
@@ -2688,17 +2762,20 @@ cc_library(
         ":SPIRVPassIncGen",
         ":SPIRVToLLVM",
         ":Shape",
+        ":ShapeToSCF",
         ":ShapeToStandard",
         ":ShapeTransforms",
         ":ShapeTransformsPassIncGen",
         ":StandardOps",
         ":StandardOpsTransforms",
         ":StandardOpsTransformsPassIncGen",
-        ":StandardToSPIRVConversions",
+        ":StandardToLLVM",
+        ":StandardToSPIRVTransforms",
         ":Transforms",
         ":TransformsPassIncGen",
         ":VectorOps",
         ":VectorToLLVM",
+        ":VectorToROCDL",
         ":VectorToSCF",
     ],
 )
@@ -2759,13 +2836,13 @@ cc_library(
     includes = ["include"],
     deps = [
         ":AllPassesAndDialectsNoRegistration",
-        ":CFGTransforms",
         ":ExecutionEngine",
         ":ExecutionEngineUtils",
         ":IR",
         ":LLVMDialect",
         ":Parser",
         ":Pass",
+        ":SCFToStandard",
         ":Support",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:OrcJIT",
@@ -2835,12 +2912,12 @@ cc_library(
         ":IR",
         ":Pass",
         ":SPIRVDialect",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
-        "//third_party/vulkan_loader",
         "@llvm-project//llvm:Support",
         "@vulkan_headers",
+        "@vulkan_sdk//:sdk",
     ],
 )
 
@@ -2857,10 +2934,7 @@ cc_binary(
 cc_binary(
     name = "mlir-cuda-runner",
     srcs = ["tools/mlir-cuda-runner/mlir-cuda-runner.cpp"],
-    data = [
-        ":tools/libcuda-runtime-wrappers.so",
-        "@llvm-project//mlir/test/mlir-cpu-runner:libmlir_runner_utils.so",
-    ],
+    data = [":tools/libcuda-runtime-wrappers.so"],
     deps = [
         ":AllPassesAndDialectsNoRegistration",
         ":ExecutionEngineUtils",
@@ -2871,10 +2945,10 @@ cc_binary(
         ":GPUTransforms",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":MlirJitRunner",
         ":NVVMDialect",
         ":Pass",
+        ":StandardToLLVM",
         ":TargetNVVMIR",
         ":Transforms",
         "//devtools/build/runtime:get_runfiles_dir",
@@ -2898,11 +2972,11 @@ cc_binary(
         ":GPUToSPIRVTransforms",
         ":GPUToVulkanTransforms",
         ":GPUTransforms",
-        ":LLVMTransforms",
         ":MlirJitRunner",
         ":Pass",
         ":SPIRVDialect",
-        ":StandardToSPIRVConversions",
+        ":StandardToLLVM",
+        ":StandardToSPIRVTransforms",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -3112,7 +3186,7 @@ cc_library(
         ":Pass",
         ":QuantOpsIncGen",
         ":QuantPassIncGen",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         "@llvm-project//llvm:Support",
     ],
@@ -3247,18 +3321,18 @@ cc_library(
     ]),
     includes = ["include"],
     deps = [
-        ":AffineToStandardTransforms",
+        ":AffineToStandard",
         ":Analysis",
-        ":CFGTransforms",
         ":ConversionPassIncGen",
         ":EDSC",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":LinalgOps",
         ":LinalgTransforms",
         ":Pass",
+        ":SCFToStandard",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":Transforms",
         ":VectorToLLVM",
@@ -3338,7 +3412,7 @@ cc_library(
         ":LinalgOpsIncGen",
         ":LinalgStructuredOpsIncGen",
         ":Parser",
-        ":SideEffects",
+        ":SideEffectInterfaces",
         ":StandardOps",
         ":Support",
         ":ViewLikeInterface",
@@ -3384,21 +3458,21 @@ cc_library(
     includes = ["include"],
     deps = [
         ":Affine",
-        ":AffineToStandardTransforms",
+        ":AffineToStandard",
         ":Analysis",
-        ":CFGTransforms",
         ":DialectUtils",
         ":EDSC",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":LinalgOps",
         ":LinalgPassIncGen",
         ":LinalgStructuredOpsIncGen",
         ":Pass",
         ":SCFDialect",
+        ":SCFToStandard",
         ":SCFTransforms",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":TransformUtils",
         ":Transforms",
@@ -3490,9 +3564,9 @@ cc_library(
         ":EDSC",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":Pass",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":Transforms",
         ":VectorOps",
@@ -3517,10 +3591,10 @@ cc_library(
         ":EDSC",
         ":IR",
         ":LLVMDialect",
-        ":LLVMTransforms",
         ":Pass",
         ":SCFDialect",
         ":StandardOps",
+        ":StandardToLLVM",
         ":Support",
         ":Transforms",
         ":VectorOps",

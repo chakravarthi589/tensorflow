@@ -776,51 +776,51 @@ class ComputeWaitTimeTest
     : public ::testing::TestWithParam<std::tuple<double, double, double>> {};
 
 TEST_P(ComputeWaitTimeTest, Model) {
-  const double output_time = std::get<0>(GetParam());
-  const double input_time = std::get<1>(GetParam());
+  const double producer_time = std::get<0>(GetParam());
+  const double consumer_time = std::get<1>(GetParam());
   const double buffer_size = std::get<2>(GetParam());
 
-  double output_time_derivative = 0.0L;
-  double input_time_derivative = 0.0L;
+  double producer_time_derivative = 0.0L;
+  double consumer_time_derivative = 0.0L;
   double buffer_size_derivative = 0.0L;
 
   double wait_time = model::Node::ComputeWaitTime(
-      output_time, input_time, buffer_size, &output_time_derivative,
-      &input_time_derivative, &buffer_size_derivative);
+      producer_time, consumer_time, buffer_size, &producer_time_derivative,
+      &consumer_time_derivative, &buffer_size_derivative);
 
-  double new_wait_time =
-      model::Node::ComputeWaitTime(output_time + kParameterStep, input_time,
-                                   buffer_size, nullptr, nullptr, nullptr);
-  EXPECT_NEAR(output_time_derivative,
+  double new_wait_time = model::Node::ComputeWaitTime(
+      producer_time + kParameterStep, consumer_time, buffer_size, nullptr,
+      nullptr, nullptr);
+  EXPECT_NEAR(producer_time_derivative,
               (new_wait_time - wait_time) / kParameterStep,
               kComparisonPrecision);
 
-  if (output_time >= kParameterStep) {
-    new_wait_time =
-        model::Node::ComputeWaitTime(output_time - kParameterStep, input_time,
-                                     buffer_size, nullptr, nullptr, nullptr);
-    EXPECT_NEAR(output_time_derivative,
+  if (producer_time >= kParameterStep) {
+    new_wait_time = model::Node::ComputeWaitTime(producer_time - kParameterStep,
+                                                 consumer_time, buffer_size,
+                                                 nullptr, nullptr, nullptr);
+    EXPECT_NEAR(producer_time_derivative,
                 (wait_time - new_wait_time) / kParameterStep,
                 kComparisonPrecision);
   }
 
-  new_wait_time =
-      model::Node::ComputeWaitTime(output_time, input_time + kParameterStep,
-                                   buffer_size, nullptr, nullptr, nullptr);
-  EXPECT_NEAR(input_time_derivative,
+  new_wait_time = model::Node::ComputeWaitTime(
+      producer_time, consumer_time + kParameterStep, buffer_size, nullptr,
+      nullptr, nullptr);
+  EXPECT_NEAR(consumer_time_derivative,
               (new_wait_time - wait_time) / kParameterStep,
               kComparisonPrecision);
 
-  if (input_time >= kParameterStep) {
-    new_wait_time =
-        model::Node::ComputeWaitTime(output_time, input_time - kParameterStep,
-                                     buffer_size, nullptr, nullptr, nullptr);
-    EXPECT_NEAR(input_time_derivative,
+  if (consumer_time >= kParameterStep) {
+    new_wait_time = model::Node::ComputeWaitTime(
+        producer_time, consumer_time - kParameterStep, buffer_size, nullptr,
+        nullptr, nullptr);
+    EXPECT_NEAR(consumer_time_derivative,
                 (wait_time - new_wait_time) / kParameterStep,
                 kComparisonPrecision);
   }
 
-  new_wait_time = model::Node::ComputeWaitTime(output_time, input_time,
+  new_wait_time = model::Node::ComputeWaitTime(producer_time, consumer_time,
                                                buffer_size + kParameterStep,
                                                nullptr, nullptr, nullptr);
   EXPECT_NEAR(buffer_size_derivative,
@@ -828,7 +828,7 @@ TEST_P(ComputeWaitTimeTest, Model) {
               kComparisonPrecision);
 
   if (buffer_size >= kParameterStep) {
-    new_wait_time = model::Node::ComputeWaitTime(output_time, input_time,
+    new_wait_time = model::Node::ComputeWaitTime(producer_time, consumer_time,
                                                  buffer_size - kParameterStep,
                                                  nullptr, nullptr, nullptr);
     EXPECT_NEAR(buffer_size_derivative,
@@ -842,40 +842,6 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(::testing::Values(0, 20, 40, 80, 100),
                        ::testing::Values(0, 20, 40, 80, 100),
                        ::testing::Values(0, 1, 2, 4, 10, 20, 40)));
-
-class SelfProcessingTimeTest : public ::testing::TestWithParam<int64> {};
-
-TEST_P(SelfProcessingTimeTest, Model) {
-  const int64 add_times = GetParam();
-  std::shared_ptr<Node> source = model::MakeSourceNode({0, "source", nullptr});
-  for (int i = 0; i < add_times; i++) {
-    source->add_processing_time(i);
-    source->record_element();
-  }
-  double self_processing_time =
-      (add_times == 0 ? 0.0 : (static_cast<double>(add_times) - 1.0) / 2.0);
-  EXPECT_EQ(source->SelfProcessingTime(), self_processing_time);
-}
-
-INSTANTIATE_TEST_SUITE_P(Test, SelfProcessingTimeTest,
-                         ::testing::Values(0, 1, 2, 5, 10, 20, 40));
-
-class SelfInputTimeTest : public ::testing::TestWithParam<int64> {};
-
-TEST_P(SelfInputTimeTest, Model) {
-  const int64 add_times = GetParam();
-  std::shared_ptr<Node> source = model::MakeSourceNode({0, "source", nullptr});
-  for (int i = 0; i < add_times; i++) {
-    source->record_input((1 + i) * i / 2 + 1);
-    source->record_element();
-  }
-  double self_input_time =
-      (add_times <= 1 ? 0.0 : static_cast<double>(add_times) / 2.0);
-  EXPECT_EQ(source->SelfInputTime(), self_input_time);
-}
-
-INSTANTIATE_TEST_SUITE_P(Test, SelfInputTimeTest,
-                         ::testing::Values(0, 1, 2, 5, 10, 20, 40));
 
 }  // namespace
 }  // namespace model

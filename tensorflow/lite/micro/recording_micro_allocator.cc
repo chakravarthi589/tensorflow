@@ -29,23 +29,30 @@ RecordingMicroAllocator::RecordingMicroAllocator(
       recording_memory_allocator_(recording_memory_allocator) {}
 
 RecordingMicroAllocator* RecordingMicroAllocator::Create(
-    RecordingSimpleMemoryAllocator* memory_allocator,
-    ErrorReporter* error_reporter) {
-  TFLITE_DCHECK(memory_allocator != nullptr);
-  uint8_t* allocator_buffer = memory_allocator->AllocateFromTail(
+    uint8_t* tensor_arena, size_t arena_size, ErrorReporter* error_reporter) {
+  TFLITE_DCHECK(error_reporter != nullptr);
+
+  RecordingSimpleMemoryAllocator* simple_memory_allocator =
+      RecordingSimpleMemoryAllocator::Create(error_reporter, tensor_arena,
+                                             arena_size);
+  TFLITE_DCHECK(simple_memory_allocator != nullptr);
+
+  uint8_t* allocator_buffer = simple_memory_allocator->AllocateFromTail(
       sizeof(RecordingMicroAllocator), alignof(RecordingMicroAllocator));
   RecordingMicroAllocator* allocator = new (allocator_buffer)
-      RecordingMicroAllocator(memory_allocator, error_reporter);
+      RecordingMicroAllocator(simple_memory_allocator, error_reporter);
   return allocator;
 }
 
 RecordedAllocation RecordingMicroAllocator::GetRecordedAllocation(
-    RecordedAllocationType allocation_type) {
+    RecordedAllocationType allocation_type) const {
   switch (allocation_type) {
     case RecordedAllocationType::kTfLiteTensorArray:
       return recorded_tflite_tensor_array_data_;
     case RecordedAllocationType::kTfLiteTensorArrayQuantizationData:
       return recorded_tflite_tensor_array_quantization_data_;
+    case RecordedAllocationType::kTfLiteTensorVariableBufferData:
+      return recorded_tflite_tensor_variable_buffer_data_;
     case RecordedAllocationType::kNodeAndRegistrationArray:
       return recorded_node_and_registration_array_data_;
     case RecordedAllocationType::kOpData:
@@ -56,7 +63,12 @@ RecordedAllocation RecordingMicroAllocator::GetRecordedAllocation(
   return RecordedAllocation();
 }
 
-void RecordingMicroAllocator::PrintAllocations() {
+const RecordingSimpleMemoryAllocator*
+RecordingMicroAllocator::GetSimpleMemoryAllocator() const {
+  return recording_memory_allocator_;
+}
+
+void RecordingMicroAllocator::PrintAllocations() const {
   TF_LITE_REPORT_ERROR(
       error_reporter(),
       "[RecordingMicroAllocator] Arena allocation total %d bytes",
@@ -70,59 +82,82 @@ void RecordingMicroAllocator::PrintAllocations() {
       "[RecordingMicroAllocator] Arena allocation tail %d bytes",
       recording_memory_allocator_->GetTailUsedBytes());
   PrintRecordedAllocation(RecordedAllocationType::kTfLiteTensorArray,
-                          "TfLiteTensor struct allocation");
+                          "TfLiteTensor struct", "tensors");
   PrintRecordedAllocation(
       RecordedAllocationType::kTfLiteTensorArrayQuantizationData,
-      "TfLiteTensor quantization data allocations");
+      "TfLiteTensor quantization data", "allocations");
+  PrintRecordedAllocation(
+      RecordedAllocationType::kTfLiteTensorVariableBufferData,
+      "TfLiteTensor variable buffer data", "allocations");
   PrintRecordedAllocation(RecordedAllocationType::kNodeAndRegistrationArray,
-                          "NodeAndRegistration struct allocation");
+                          "NodeAndRegistration struct",
+                          "NodeAndRegistration structs");
   PrintRecordedAllocation(RecordedAllocationType::kOpData,
-                          "Operator runtime data allocation");
+                          "Operator runtime data", "OpData structs");
 }
 
 void RecordingMicroAllocator::PrintRecordedAllocation(
-    RecordedAllocationType allocation_type, const char* allocation_name) {
+    RecordedAllocationType allocation_type, const char* allocation_name,
+    const char* allocation_description) const {
   RecordedAllocation allocation = GetRecordedAllocation(allocation_type);
-  TF_LITE_REPORT_ERROR(error_reporter(),
-                       "[RecordingMicroAllocator] '%s' used %d bytes "
-                       "(requested %d bytes %d times)",
-                       allocation_name, allocation.used_bytes,
-                       allocation.requested_bytes, allocation.count);
+  TF_LITE_REPORT_ERROR(
+      error_reporter(),
+      "[RecordingMicroAllocator] '%s' used %d bytes with alignment overhead "
+      "(requested %d bytes for %d %s)",
+      allocation_name, allocation.used_bytes, allocation.requested_bytes,
+      allocation.count, allocation_description);
 }
 
 TfLiteStatus RecordingMicroAllocator::AllocateTfLiteTensorArray(
     TfLiteContext* context, const SubGraph* subgraph) {
-  SnapshotAllocationUsage(recorded_tflite_tensor_array_data_);
+  RecordedAllocation allocations = SnapshotAllocationUsage();
 
   TfLiteStatus status =
       MicroAllocator::AllocateTfLiteTensorArray(context, subgraph);
 
-  RecordAllocationUsage(recorded_tflite_tensor_array_data_);
-  recorded_tflite_tensor_array_data_.count = context->tensors_size;
+  RecordAllocationUsage(allocations, recorded_tflite_tensor_array_data_);
+  // The allocation for this recording will always be 1. This is because the
+  // parent class mallocs one large allocation for the number of tensors in the
+  // graph (e.g. sizeof(TfLiteTensor) * num_tensors).
+  // To prevent extra overhead and potential for fragmentation, manually adjust
+  // the accounting by decrementing by 1 and adding the actual number of tensors
+  // used in the graph:
+  recorded_tflite_tensor_array_data_.count += context->tensors_size - 1;
   return status;
 }
 
 TfLiteStatus RecordingMicroAllocator::PopulateTfLiteTensorArrayFromFlatbuffer(
     const Model* model, TfLiteContext* context, const SubGraph* subgraph) {
-  SnapshotAllocationUsage(recorded_tflite_tensor_array_quantization_data_);
+  RecordedAllocation allocations = SnapshotAllocationUsage();
 
   TfLiteStatus status = MicroAllocator::PopulateTfLiteTensorArrayFromFlatbuffer(
       model, context, subgraph);
 
-  RecordAllocationUsage(recorded_tflite_tensor_array_quantization_data_);
+  RecordAllocationUsage(allocations,
+                        recorded_tflite_tensor_array_quantization_data_);
   return status;
 }
 
 TfLiteStatus RecordingMicroAllocator::AllocateNodeAndRegistrations(
     const SubGraph* subgraph, NodeAndRegistration** node_and_registrations) {
-  SnapshotAllocationUsage(recorded_node_and_registration_array_data_);
+  RecordedAllocation allocations = SnapshotAllocationUsage();
 
   TfLiteStatus status = MicroAllocator::AllocateNodeAndRegistrations(
       subgraph, node_and_registrations);
 
-  RecordAllocationUsage(recorded_node_and_registration_array_data_);
-  recorded_node_and_registration_array_data_.count =
-      subgraph->operators()->size();
+  RecordAllocationUsage(allocations,
+                        recorded_node_and_registration_array_data_);
+  // The allocation count in SimpleMemoryAllocator will only be 1. To provide
+  // better logging, decrement by 1 and add in the actual number of operators
+  // used in the graph:
+  // The allocation for this recording will always be 1. This is because the
+  // parent class mallocs one large allocation for the number of nodes in the
+  // graph (e.g. sizeof(NodeAndRegistration) * num_nodes).
+  // To prevent extra overhead and potential for fragmentation, manually adjust
+  // the accounting by decrementing by 1 and adding the actual number of nodes
+  // used in the graph:
+  recorded_node_and_registration_array_data_.count +=
+      subgraph->operators()->size() - 1;
   return status;
 }
 
@@ -131,33 +166,45 @@ RecordingMicroAllocator::PrepareNodeAndRegistrationDataFromFlatbuffer(
     const Model* model, const SubGraph* subgraph,
     const MicroOpResolver& op_resolver,
     NodeAndRegistration* node_and_registrations) {
-  SnapshotAllocationUsage(recorded_op_data_);
+  RecordedAllocation allocations = SnapshotAllocationUsage();
 
   TfLiteStatus status =
       MicroAllocator::PrepareNodeAndRegistrationDataFromFlatbuffer(
           model, subgraph, op_resolver, node_and_registrations);
 
-  RecordAllocationUsage(recorded_op_data_);
+  RecordAllocationUsage(allocations, recorded_op_data_);
   return status;
 }
 
-void RecordingMicroAllocator::SnapshotAllocationUsage(
-    RecordedAllocation& recorded_allocation) {
-  recorded_allocation.requested_bytes =
-      recording_memory_allocator_->GetRequestedBytes();
-  recorded_allocation.used_bytes = recording_memory_allocator_->GetUsedBytes();
-  recorded_allocation.count = recording_memory_allocator_->GetAllocatedCount();
+TfLiteStatus RecordingMicroAllocator::AllocateVariables(
+    TfLiteContext* context, const SubGraph* subgraph) {
+  RecordedAllocation allocations = SnapshotAllocationUsage();
+
+  TfLiteStatus status = MicroAllocator::AllocateVariables(context, subgraph);
+
+  RecordAllocationUsage(allocations,
+                        recorded_tflite_tensor_variable_buffer_data_);
+  return status;
+}
+
+RecordedAllocation RecordingMicroAllocator::SnapshotAllocationUsage() const {
+  return {/*requested_bytes=*/recording_memory_allocator_->GetRequestedBytes(),
+          /*used_bytes=*/recording_memory_allocator_->GetUsedBytes(),
+          /*count=*/recording_memory_allocator_->GetAllocatedCount()};
 }
 
 void RecordingMicroAllocator::RecordAllocationUsage(
+    const RecordedAllocation& snapshotted_allocation,
     RecordedAllocation& recorded_allocation) {
-  recorded_allocation.requested_bytes =
+  recorded_allocation.requested_bytes +=
       recording_memory_allocator_->GetRequestedBytes() -
-      recorded_allocation.requested_bytes;
-  recorded_allocation.used_bytes = recording_memory_allocator_->GetUsedBytes() -
-                                   recorded_allocation.used_bytes;
-  recorded_allocation.count = recording_memory_allocator_->GetAllocatedCount() -
-                              recorded_allocation.count;
+      snapshotted_allocation.requested_bytes;
+  recorded_allocation.used_bytes +=
+      recording_memory_allocator_->GetUsedBytes() -
+      snapshotted_allocation.used_bytes;
+  recorded_allocation.count +=
+      recording_memory_allocator_->GetAllocatedCount() -
+      snapshotted_allocation.count;
 }
 
 }  // namespace tflite

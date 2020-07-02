@@ -146,8 +146,6 @@ class Node {
         bytes_produced_(0),
         num_elements_(0),
         processing_time_(0),
-        input_time_(0),
-        last_input_time_(0),
         record_metrics_(true),
         metrics_(name_),
         output_(args.output.get()) {}
@@ -268,15 +266,6 @@ class Node {
     num_elements_++;
   }
 
-  // Records that an element has been requested.
-  void record_input(int64 time_nanos) TF_LOCKS_EXCLUDED(mu_) {
-    if (last_input_time_ != 0) {
-      DCHECK_LE(last_input_time_, time_nanos);
-      input_time_ += time_nanos - last_input_time_;
-    }
-    last_input_time_ = time_nanos;
-  }
-
   // Records that a node thread has started executing.
   void record_start(int64 time_nanos) TF_LOCKS_EXCLUDED(mu_) {
     DCHECK_EQ(work_start_, 0);
@@ -305,9 +294,10 @@ class Node {
     autotune_.store(autotune);
   }
 
-  // Given the average time between output events (`output_time`), the average
-  // time between input events (`input_time`) and the buffer size, the method
-  // computes the expected time an input event will have to wait.
+  // Given the average time between events when the elements in the buffer are
+  // produced (`producer_time`), the average time between events when elements
+  // in the buffer are consumed (`consumer_time`) and the buffer size, the
+  // method computes the expected time an consumer event will have to wait.
   //
   // The wait time is approximated as the product of the probability the buffer
   // will be empty and the time it takes to produce an element into the buffer.
@@ -316,13 +306,14 @@ class Node {
   // problem as an M/M/1/K queue
   // (https://en.wikipedia.org/wiki/Birth%E2%80%93death_process#M/M/1/K_queue).
   //
-  // Collects derivatives of `ComputeWaitTime` w.r.t `output_time`, `input_time'
-  // and `buffer_size` if the corresponding pointers are not `nullptr`.
-  static double ComputeWaitTime(const double& output_time,
-                                const double& input_time,
+  // Collects derivatives of `ComputeWaitTime` w.r.t `producer_time`,
+  // `consumer_time' and `buffer_size` if the corresponding pointers are not
+  // `nullptr`.
+  static double ComputeWaitTime(const double& producer_time,
+                                const double& consumer_time,
                                 const double& buffer_size,
-                                double* output_time_derivative,
-                                double* input_time_derivative,
+                                double* producer_time_derivative,
+                                double* consumer_time_derivative,
                                 double* buffer_size_derivative);
 
   // Collects tunable parameters in the subtree rooted in this node.
@@ -351,11 +342,8 @@ class Node {
   std::shared_ptr<Node> Snapshot(std::shared_ptr<Node> output) const
       TF_LOCKS_EXCLUDED(mu_);
 
-  // Returns the per-element input time this node is called.
-  double SelfInputTime() const;
-
   // Returns the per-element processing time spent in this node.
-  double SelfProcessingTime() const;
+  double SelfProcessingTime() const TF_LOCKS_EXCLUDED(mu_);
 
   // Returns the total number of bytes buffered in all nodes in the subtree for
   // which autotuning is enabled.
@@ -477,6 +465,9 @@ class Node {
       const absl::flat_hash_map<string, double>& total_processing_times)
       TF_SHARED_LOCKS_REQUIRED(mu_);
 
+  // Returns the per-element processing time spent in this node.
+  double SelfProcessingTimeLocked() const TF_SHARED_LOCKS_REQUIRED(mu_);
+
   // Computes the per-element CPU time spent in the subtree rooted in this node
   // and stores it in `total_processing_times`. If `processing_times` is not
   // `nullptr`, collects the per-element CPU time spent in each node of the
@@ -541,9 +532,6 @@ class Node {
   std::atomic<int64> bytes_produced_;
   std::atomic<int64> num_elements_;
   std::atomic<int64> processing_time_;
-  std::atomic<int64> input_time_;
-  // Records the time current node is called for future use.
-  std::atomic<int64> last_input_time_;
   std::atomic<bool> record_metrics_;
   Metrics metrics_;
   absl::flat_hash_map<string, std::shared_ptr<Parameter>> parameters_
@@ -640,7 +628,10 @@ class Model {
   // relative to other transformations. The collected parameters are returned
   // as a mapping from a (unique) node name to a parallelism parameter.
   absl::flat_hash_map<string, std::shared_ptr<Parameter>>
-  CollectEssentialParallelism(std::shared_ptr<Node> node);
+  CollectEssentialParallelism(
+      std::shared_ptr<Node> node,
+      const absl::flat_hash_map<string, std::shared_ptr<Parameter>>&
+          parameters);
 
   // This optimization algorithm starts by setting all tunable parallelism
   // parameters to the minimum value. It then repeatedly identifies the

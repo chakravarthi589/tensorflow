@@ -31,10 +31,25 @@ std::unique_ptr<OperationPass<FuncOp>> CreateBreakUpIslandsPass();
 std::unique_ptr<OperationPass<FuncOp>>
 CreateFunctionalToExecutorDialectConversionPass();
 
+// Creates a pass that lifts inner ops of tf_executor.island ops in
+// tf_executor.graph into the same block as the tf_executor.graph.
+std::unique_ptr<OperationPass<FuncOp>>
+CreateExecutorDialectToFunctionalConversionPass();
+
 namespace TF {
-// Transforms functional control flow operations in the standard TensorFlow
-// dialect to MLIR Control Flow Graph (CFG) form.
+// Transforms functional control flow operations in the TensorFlow dialect to
+// MLIR Control Flow Graph (CFG) form.
 std::unique_ptr<OperationPass<FuncOp>> CreateTFFunctionalControlFlowToCFG();
+
+// Transforms functional control flow operations in the TensorFlow dialect to
+// their region based counterparts.
+std::unique_ptr<OperationPass<ModuleOp>>
+CreateTFFunctionalControlFlowToRegions();
+
+// Transforms region bases control flow operations in the TensorFlow dialect to
+// their functional counterparts.
+std::unique_ptr<OperationPass<ModuleOp>>
+CreateTFRegionControlFlowToFunctional();
 
 // Materialize the MlirPassthroughOp by replacing it with the MLIR module
 // attached as an attribute.
@@ -54,7 +69,7 @@ std::unique_ptr<OperationPass<FuncOp>> CreateTFOptimizePass();
 
 // Creates pass to rewrite RecvTPUEmbeddingActivationsOp and
 // SendTPUEmbeddingGradients ops to internal variants.
-std::unique_ptr<OperationPass<FuncOp>> CreateRewriteTPUEmbeddingOps();
+std::unique_ptr<OperationPass<FuncOp>> CreateRewriteTPUEmbeddingOpsPass();
 
 // Performs specific fusion for GPU targets.
 std::unique_ptr<OperationPass<FuncOp>> CreateGpuOpFusionPass();
@@ -107,21 +122,6 @@ std::unique_ptr<OperationPass<ModuleOp>> CreatePromoteVarHandlesToArgsPass();
 std::unique_ptr<OperationPass<FuncOp>>
 CreateConvertReadonlyReferenceVariablesToResourceVariablesPass();
 
-// Marks function visibility using tf.entry_function specification. That is,
-// functions with tf.entry_function attributes are marked with public
-// visibility while the other functions are marked with private visibility.
-LogicalResult MarkFunctionVisibilityUsingEntryFunctionSpecification(
-    ModuleOp module);
-// Creates a pass that uses tf.entry_function specification to mark function
-// visibility.
-std::unique_ptr<OperationPass<ModuleOp>>
-CreateMarkFunctionVisibilityUsingEntryFunctionSpecificationPass();
-
-// Creates a pass that marks the main function with public visibility, while
-// other functions are marked with private visibility.
-std::unique_ptr<OperationPass<ModuleOp>>
-CreateMarkOnlyMainFunctionWithPublicVisibilityPass();
-
 // Creates a simple device assignment pass on TF dialect for CoreRT use case.
 std::unique_ptr<OperationPass<FuncOp>> CreateSimpleTFDeviceAssignmentPass(
     llvm::StringRef default_device);
@@ -148,8 +148,13 @@ CreateTensorArrayOpsDecompositionPass();
 // Create a pass that legalize HLO to TF dialect.
 std::unique_ptr<OperationPass<FuncOp>> CreateLegalizeHloToTfPass();
 
-// Creates a pass that performs fusion of common sequences of ops.
-std::unique_ptr<OperationPass<FuncOp>> CreateOpFusionPass();
+// Matches sequence of ops to TensorFlow fused kernels. This pass should not be
+// generally used beyond exporting to runtimes that supports these ops. In the
+// future these fusions may be codegen'd automatically.
+std::unique_ptr<OperationPass<FuncOp>> CreateFusedKernelMatcherPass();
+
+// Creates function pass to select device index/fold tf.DeviceIndex.
+std::unique_ptr<OperationPass<FuncOp>> CreateDeviceIndexSelectorPass();
 }  // namespace TF
 
 namespace tf_executor {
@@ -284,7 +289,8 @@ std::unique_ptr<OperationPass<FuncOp>> CreateTPUHostComputationExpansionPass();
 
 // Creates a pass that extract outside compilation (CPU ops inside TPU cluster)
 // ops to a separate parallel_execute region to run on CPU.
-std::unique_ptr<OperationPass<FuncOp>> CreateTPUExtractOutsideCompilationPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+CreateTPUExtractOutsideCompilationPass();
 
 // Populates the supplied passmanager with the passes required to run the
 void CreateTPUBridgePipeline(OpPassManager& pm);
@@ -294,23 +300,6 @@ void CreateTPUBridgePipeline(OpPassManager& pm);
 void CreateTPUBridgePipelineV1(OpPassManager& pm);
 
 }  // namespace TFTPU
-
-namespace tf_saved_model {
-
-// Creates a pass that optimizes tf_saved_model.global_tensor ops.
-std::unique_ptr<OperationPass<ModuleOp>> CreateOptimizeGlobalTensorsPass();
-
-// Creates a pass that freezes tf_saved_model.global_tensor ops.
-std::unique_ptr<OperationPass<ModuleOp>> CreateFreezeGlobalTensorsPass();
-
-// Creates a pass that uses tf_saved_model dialect linkage information
-// to mark function visibility. That is, exported functions are marked with
-// public visibility while the other functions are marked with private
-// visibility.
-std::unique_ptr<OperationPass<ModuleOp>>
-CreateMarkFunctionVisibilityUsingSavedModelLinkagePass();
-
-}  // namespace tf_saved_model
 
 }  // namespace mlir
 
