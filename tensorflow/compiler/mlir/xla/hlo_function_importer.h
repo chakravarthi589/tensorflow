@@ -13,12 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_COMPILER_MLIR_XLA_HLO_FUNCTION_IMPORTER_H_
-#define TENSORFLOW_COMPILER_MLIR_XLA_HLO_FUNCTION_IMPORTER_H_
+#ifndef TENSORFLOW_COMPILER_MLIR_XLA_FUNCTION_IMPORTER_H_
+#define TENSORFLOW_COMPILER_MLIR_XLA_FUNCTION_IMPORTER_H_
 
 #include <unordered_map>
 
 #include "absl/types/optional.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/Function.h"  // from @llvm-project
@@ -62,7 +63,10 @@ class HloFunctionImporter {
       : context_(module.getContext()),
         module_(module),
         builder_(builder),
-        function_map_(function_map) {}
+        function_map_(function_map) {
+    context_->loadDialect<mlir::StandardOpsDialect>();
+    context_->loadDialect<mlir::mhlo::MhloDialect>();
+  }
 
   // Imports the given computation as a new function, if it hasn't been already
   // imported.
@@ -143,4 +147,4 @@ class HloFunctionImporter {
 
 }  // namespace xla
 
-#endif  // TENSORFLOW_COMPILER_MLIR_XLA_HLO_FUNCTION_IMPORTER_H_
+#endif  // TENSORFLOW_COMPILER_MLIR_XLA_FUNCTION_IMPORTER_H_

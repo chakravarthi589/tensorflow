@@ -16,20 +16,25 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/object_reader.h"
 
 #include <cstdint>
-#include <unordered_map>
+#include <optional>
+#include <string>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_cat.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/model_builder_helper.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
+#include "tensorflow/lite/delegates/gpu/common/tensor.h"
 #include "tensorflow/lite/delegates/utils.h"
+#include "tensorflow/lite/kernels/kernel_util.h"
 
 namespace tflite {
 namespace gpu {
 
 absl::Status ObjectReader::ReadNonConstantTensor(
-    TfLiteContext* context, std::unordered_map<int, Value*>* tensor_to_value,
-    std::unordered_map<int, int>* quant_conversion_map, GraphFloat32* graph,
+    TfLiteContext* context, absl::flat_hash_map<int, Value*>* tensor_to_value,
+    absl::flat_hash_map<int, int>* quant_conversion_map, GraphFloat32* graph,
     uint32_t tensor_idx, Value** value) {
   if (tensor_idx >= context->tensors_size) {
     return absl::OutOfRangeError(
@@ -37,14 +42,14 @@ absl::Status ObjectReader::ReadNonConstantTensor(
   }
 
   if (tensor_to_value->find(tensor_idx) == tensor_to_value->end()) {
-    TfLiteTensor& tflite_tensor = context->tensors[tensor_idx];
-    if (tflite::IsConstantTensor(&tflite_tensor)) {
+    TfLiteTensor* tflite_tensor = &context->tensors[tensor_idx];
+    if (tflite::IsConstantTensor(tflite_tensor)) {
       return absl::InvalidArgumentError(absl::StrCat(
           "ReadNonConstantTensor: value is a constant tensor: ", tensor_idx));
     }
 
-    if ((tflite_tensor.type == kTfLiteInt8 ||
-         tflite_tensor.type == kTfLiteUInt8) &&
+    if ((tflite_tensor->type == kTfLiteInt8 ||
+         tflite_tensor->type == kTfLiteUInt8) &&
         quant_conversion_map) {
       // Quantized case
       if (quant_conversion_map->find(tensor_idx) ==
@@ -70,9 +75,9 @@ absl::Status ObjectReader::ReadNonConstantTensor(
         value->quant_params.emplace();
         // tflite_tensor from the outer scope is invalidated due to calling
         // CreateNewTensorWithDifferentType
-        tflite_tensor = context->tensors[tensor_idx];
+        tflite_tensor = &context->tensors[tensor_idx];
         RETURN_IF_ERROR(
-            PopulateQuantParams(tflite_tensor, &value->quant_params.value()));
+            PopulateQuantParams(*tflite_tensor, &value->quant_params.value()));
         (*tensor_to_value)[fp_tensor_index] = value;
       }
       // We do not use the original tensor index as reference for the GPU
@@ -82,7 +87,7 @@ absl::Status ObjectReader::ReadNonConstantTensor(
       // Floating-point case.
       Value* value = graph->NewValue();
       RETURN_IF_ERROR(
-          ConvertTfLiteTensorToTensorRef(tflite_tensor, &value->tensor));
+          ConvertTfLiteTensorToTensorRef(*tflite_tensor, &value->tensor));
       value->tensor.ref = tensor_idx;
       (*tensor_to_value)[tensor_idx] = value;
     }

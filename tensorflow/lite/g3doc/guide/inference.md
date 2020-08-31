@@ -57,6 +57,12 @@ explicit goal and some variance between languages is to be expected.
 Across all libraries, the TensorFlow Lite API enables you to load models, feed
 inputs, and retrieve inference outputs.
 
+## Supported operations
+
+TensorFlow Lite supports a subset of TensorFlow operations with some
+limitations. For full list of operations and limitations see
+[TF Lite Ops page](https://www.tensorflow.org/mlir/tfl_ops).
+
 ### Android
 
 On Android, TensorFlow Lite inference can be performed using either Java or C++
@@ -78,7 +84,7 @@ platform specific wrapper code. The wrapper code removes the need to interact
 directly with `ByteBuffer` on Android. Instead, developers can interact with the
 TensorFlow Lite model with typed objects such as `Bitmap` and `Rect`. For more
 information, please refer to the
-[TensorFlow Lite Android wrapper code generator](codegen.md).
+[TensorFlow Lite Android wrapper code generator](../inference_with_metadata/codegen.md).
 
 ### iOS
 

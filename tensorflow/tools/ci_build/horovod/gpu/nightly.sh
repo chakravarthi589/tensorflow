@@ -57,20 +57,27 @@ sudo make all install
 export LD_LIBRARY_PATH=/usr/local/lib/openmpi
 sudo ldconfig
 
+sudo update-alternatives --install /usr/bin/gcc gcc /dt7/usr/bin/gcc 60 --slave /usr/bin/g++ g++ /dt7/usr/bin/g++
+
+g++ --version
+
 # Install Horovod.
 cd ..
+HOROVOD_GPU_OPERATIONS=NCCL
 HOROVOD_WITH_TENSORFLOW=1
-pip3.7 install horovod[tensorflow]
+HOROVOD_WITHOUT_PYTORCH=1
+HOROVOD_WITHOUT_MXNET=1
+pip3.7 install horovod[tensorflow] --user
 
 # Install tests.
 git clone https://github.com/DEKHTIARJonathan/TF_HVD_Stability_Test.git
 
 # Install pytest.
-pip3.7 install -U pytest
+pip3.7 install -U pytest --user
 
 # Install requirements.
 cd TF_HVD_Stability_Test
-pip3.7 install -r requirements.txt
+pip3.7 install -r requirements.txt --user
 
 # Run the tests.
 python3.7 -m pytest

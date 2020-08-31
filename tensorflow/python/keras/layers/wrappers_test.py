@@ -44,7 +44,6 @@ from tensorflow.python.ops.ragged import ragged_tensor
 from tensorflow.python.platform import test
 from tensorflow.python.training.tracking import util as trackable_util
 from tensorflow.python.util import nest
-from tensorflow.python.util import object_identity
 
 
 class _RNNCellWithConstants(keras.layers.Layer):
@@ -130,10 +129,11 @@ class TimeDistributedTest(keras_parameterized.TestCase):
 
     # check whether the model variables are present in the
     # trackable list of objects
-    checkpointed_objects = object_identity.ObjectIdentitySet(
-        trackable_util.list_objects(model))
+    checkpointed_object_ids = {
+        id(o) for o in trackable_util.list_objects(model)
+    }
     for v in model.variables:
-      self.assertIn(v, checkpointed_objects)
+      self.assertIn(id(v), checkpointed_object_ids)
 
   def test_timedistributed_static_batch_size(self):
     model = keras.models.Sequential()
@@ -305,7 +305,7 @@ class TimeDistributedTest(keras_parameterized.TestCase):
     self.assertEqual(out_2.shape.as_list(), [None, 1, 5])
 
     ph_3 = keras.backend.placeholder(shape=(None, 1, 18))
-    with self.assertRaisesRegex(ValueError, 'is incompatible with layer'):
+    with self.assertRaisesRegex(ValueError, 'is incompatible with'):
       time_dist(ph_3)
 
   def test_TimeDistributed_with_invalid_dimensions(self):
@@ -333,7 +333,7 @@ class TimeDistributedTest(keras_parameterized.TestCase):
         keras.layers.RNN(keras.layers.SimpleRNNCell(10), stateful=True))
     self.assertFalse(td2._always_use_reshape)
 
-    # Custom layers are not whitelisted for the fast reshape implementation.
+    # Custom layers are not allowlisted for the fast reshape implementation.
     td3 = keras.layers.TimeDistributed(NoReshapeLayer())
     self.assertFalse(td3._always_use_reshape)
 
@@ -492,10 +492,11 @@ class BidirectionalTest(test.TestCase, parameterized.TestCase):
 
       # check whether the model variables are present in the
       # trackable list of objects
-      checkpointed_objects = object_identity.ObjectIdentitySet(
-          trackable_util.list_objects(model))
+      checkpointed_object_ids = {
+          id(o) for o in trackable_util.list_objects(model)
+      }
       for v in model.variables:
-        self.assertIn(v, checkpointed_objects)
+        self.assertIn(id(v), checkpointed_object_ids)
 
       # test compute output shape
       ref_shape = model.layers[-1].output.shape
@@ -1030,10 +1031,11 @@ class BidirectionalTest(test.TestCase, parameterized.TestCase):
 
     # check whether the model variables are present in the
     # trackable list of objects
-    checkpointed_objects = object_identity.ObjectIdentitySet(
-        trackable_util.list_objects(model))
+    checkpointed_object_ids = {
+        id(o) for o in trackable_util.list_objects(model)
+    }
     for v in model.variables:
-      self.assertIn(v, checkpointed_objects)
+      self.assertIn(id(v), checkpointed_object_ids)
 
     # test compute output shape
     ref_shape = model.layers[-1].output.shape

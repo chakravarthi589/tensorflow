@@ -95,7 +95,7 @@ static void RegisterDialects() {
     mlir::registerDialect<mlir::tf_executor::TensorFlowExecutorDialect>();
     mlir::registerDialect<mlir::TF::TensorFlowDialect>();
     mlir::registerDialect<mlir::StandardOpsDialect>();
-    mlir::registerDialect<mlir::xla_hlo::XlaHloDialect>();
+    mlir::registerDialect<mlir::mhlo::MhloDialect>();
     mlir::registerDialect<mlir::shape::ShapeDialect>();
     return true;
   }();
@@ -142,7 +142,7 @@ Status ConvertGraphDefToXlaViaMlir(
         std::string* file_name = debug_info.mutable_files(i);
         size_t location =
             file_name->rfind(std::string(debug_info_path_begin_marker));
-        if (location != -1) {
+        if (location != std::string::npos) {
           *file_name = file_name->substr(location +
                                          debug_info_path_begin_marker.length());
         }
@@ -152,6 +152,7 @@ Status ConvertGraphDefToXlaViaMlir(
 
   RegisterDialects();
   mlir::MLIRContext context;
+  context.loadAllGloballyRegisteredDialects();
   TF_ASSIGN_OR_RETURN(
       mlir::OwningModuleRef module,
       ConvertGraphdefToMlir(pruned_graph_def, debug_info, specs, &context));

@@ -396,12 +396,12 @@ Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
 
 class DatasetIterator : public InitializableLookupTable::InitTableIterator {
  public:
-  explicit DatasetIterator(DatasetBase* dataset) : dataset_(dataset) {}
+  explicit DatasetIterator(data::DatasetBase* dataset) : dataset_(dataset) {}
 
   ~DatasetIterator() override {}
 
   Status Init(OpKernelContext* ctx) {
-    IteratorContext::Params params(ctx);
+    data::IteratorContext::Params params(ctx);
     function_handle_cache_ =
         absl::make_unique<data::FunctionHandleCache>(params.flr);
     params.function_handle_cache = function_handle_cache_.get();
@@ -409,7 +409,7 @@ class DatasetIterator : public InitializableLookupTable::InitTableIterator {
     cancellation_manager_ =
         absl::make_unique<CancellationManager>(ctx->cancellation_manager());
     params.cancellation_manager = cancellation_manager_.get();
-    iterator_ctx_ = absl::make_unique<IteratorContext>(std::move(params));
+    iterator_ctx_ = absl::make_unique<data::IteratorContext>(std::move(params));
     TF_RETURN_IF_ERROR(dataset_->MakeIterator(iterator_ctx_.get(), nullptr,
                                               "LookupTable", &iterator_));
     Next();
@@ -442,12 +442,12 @@ class DatasetIterator : public InitializableLookupTable::InitTableIterator {
   }
 
  private:
-  DatasetBase* dataset_;  // not owned.
-  std::unique_ptr<IteratorContext> iterator_ctx_;
+  data::DatasetBase* dataset_;  // not owned.
+  std::unique_ptr<data::IteratorContext> iterator_ctx_;
   std::unique_ptr<data::FunctionHandleCache> function_handle_cache_;
   ResourceMgr resource_mgr_;
   std::unique_ptr<CancellationManager> cancellation_manager_;
-  std::unique_ptr<IteratorBase> iterator_;
+  std::unique_ptr<data::IteratorBase> iterator_;
   std::vector<Tensor> tensors_;
   Status status_;
 };
@@ -456,50 +456,41 @@ void InitializeTableFromDataset(OpKernelContext* ctx,
                                 data::DatasetBase* dataset,
                                 InitializableLookupTable* table,
                                 AsyncOpKernel::DoneCallback done) {
+  // Construct the cleanup before `iter` below so that `iter` is destroyed
+  // before calling `done`.
+  auto cleanup = gtl::MakeCleanup([done = std::move(done)]() { done(); });
   // Assert that the dataset types match up to that expected in the table.
   const auto& dataset_types = dataset->output_dtypes();
-  OP_REQUIRES_ASYNC(
+  OP_REQUIRES(
       ctx, dataset_types.size() == 2,
-      errors::InvalidArgument("Dataset should have two output types only"),
-      done);
-  OP_REQUIRES_ASYNC(
-      ctx, dataset_types[0] == table->key_dtype(),
-      errors::InvalidArgument("Key dtype expected: ", table->key_dtype(),
-                              " but obtained: ", dataset_types[0],
-                              " from the dataset"),
-      done);
-  OP_REQUIRES_ASYNC(
-      ctx, dataset_types[1] == table->value_dtype(),
-      errors::InvalidArgument("Value dtype expected: ", table->value_dtype(),
-                              " but obtained: ", dataset_types[1],
-                              " from the dataset"),
-      done);
+      errors::InvalidArgument("Dataset should have two output types only"));
+  OP_REQUIRES(ctx, dataset_types[0] == table->key_dtype(),
+              errors::InvalidArgument(
+                  "Key dtype expected: ", table->key_dtype(),
+                  " but obtained: ", dataset_types[0], " from the dataset"));
+  OP_REQUIRES(ctx, dataset_types[1] == table->value_dtype(),
+              errors::InvalidArgument(
+                  "Value dtype expected: ", table->value_dtype(),
+                  " but obtained: ", dataset_types[1], " from the dataset"));
   // Assert that the dataset output shapes are scalars.
   const auto& dataset_shapes = dataset->output_shapes();
-  OP_REQUIRES_ASYNC(
+  OP_REQUIRES(
       ctx, dataset_shapes.size() == 2,
-      errors::InvalidArgument("Dataset should have two output shapes only"),
-      done);
-  OP_REQUIRES_ASYNC(
-      ctx, dataset_shapes[0].IsCompatibleWith(PartialTensorShape({})),
-      errors::InvalidArgument("Expected scalar for key. Obtained: ",
-                              dataset_shapes[0].DebugString()),
-      done);
-  OP_REQUIRES_ASYNC(
-      ctx, dataset_shapes[1].IsCompatibleWith(PartialTensorShape({})),
-      errors::InvalidArgument("Expected scalar for key. Obtained: ",
-                              dataset_shapes[1].DebugString()),
-      done);
+      errors::InvalidArgument("Dataset should have two output shapes only"));
+  OP_REQUIRES(ctx, dataset_shapes[0].IsCompatibleWith(PartialTensorShape({})),
+              errors::InvalidArgument("Expected scalar for key. Obtained: ",
+                                      dataset_shapes[0].DebugString()));
+  OP_REQUIRES(ctx, dataset_shapes[1].IsCompatibleWith(PartialTensorShape({})),
+              errors::InvalidArgument("Expected scalar for key. Obtained: ",
+                                      dataset_shapes[1].DebugString()));
   DatasetIterator iter(dataset);
-  OP_REQUIRES_OK_ASYNC(ctx, iter.Init(ctx), done);
+  OP_REQUIRES_OK(ctx, iter.Init(ctx));
   Status s = table->Initialize(iter);
   if (errors::IsFailedPrecondition(s) && table->is_initialized()) {
     LOG(INFO) << "Table already initialized from dataset.";
-    done();
     return;
   }
   ctx->SetStatus(s);
-  done();
 }
 
 }  // namespace lookup

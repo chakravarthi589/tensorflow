@@ -88,6 +88,7 @@ gentbl(
 cc_library(
     name = "tensorflow_op_interfaces",
     srcs = [
+        "ir/tf_op_interfaces.cc",
         "ir/tf_op_interfaces.cc.inc",
         "ir/tf_op_interfaces.h.inc",
         "ir/tf_verifiers.cc",
@@ -105,15 +106,67 @@ cc_library(
 )
 
 gentbl(
-    name = "tensorflow_ops_inc_gen",
+    name = "tensorflow_all_ops_inc_gen",
     tbl_outs = [
         (
             "-gen-op-decls",
-            "ir/tf_ops.h.inc",
+            "ir/tf_all_ops.h.inc",
         ),
         (
             "-gen-op-defs",
-            "ir/tf_ops.cc.inc",
+            "ir/tf_all_ops.cc.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "ir/tf_ops.td",
+    td_srcs = [
+        ":tensorflow_ops_td_files",
+    ],
+)
+
+# We only shard tf_op on name for build performance reasons.
+tf_ops_category_list = [
+    {
+        "name": "ops_a_m",
+        "include": "tf.[A-M].*$$",
+    },
+    {
+        "name": "ops_n_z",
+        "include": "tf.[N-Z].*$$",
+    },
+]
+
+[[
+    gentbl(
+        name = "tensorflow_" + target["name"] + "_inc_gen",
+        tbl_outs = [
+            (
+                "-gen-op-decls -op-include-regex='" + target["include"] + "'",
+                "ir/tf_" + target["name"] + ".h.inc",
+            ),
+            (
+                "-gen-op-defs -op-include-regex='" + target["include"] + "'",
+                "ir/tf_" + target["name"] + ".cc.inc",
+            ),
+        ],
+        tblgen = "@llvm-project//mlir:mlir-tblgen",
+        td_file = "ir/tf_ops.td",
+        td_srcs = [
+            ":tensorflow_ops_td_files",
+        ],
+    ),
+] for target in tf_ops_category_list]
+
+gentbl(
+    name = "tensorflow_remaining_ops_inc_gen",
+    tbl_outs = [
+        (
+            "-gen-op-decls -op-exclude-regex='" + "|".join([target["include"] for target in tf_ops_category_list]) + "' ",
+            "ir/tf_remaining_ops.h.inc",
+        ),
+        (
+            "-gen-op-defs -op-exclude-regex='" + "|".join([target["include"] for target in tf_ops_category_list]) + "' ",
+            "ir/tf_remaining_ops.cc.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
@@ -144,6 +197,7 @@ gentbl(
     td_srcs = [
         "@llvm-project//mlir:include/mlir/IR/OpBase.td",
         "@llvm-project//mlir:include/mlir/Dialect/StandardOps/IR/Ops.td",
+        "@llvm-project//mlir:include/mlir/IR/SymbolInterfaces.td",
     ],
     test = True,
 )
@@ -178,7 +232,7 @@ gentbl(
     name = "tensorflow_device_ops_inc_gen",
     tbl_outs = [
         (
-            "-gen-op-decls",
+            "-gen-op-decls ",
             "ir/tf_device.h.inc",
         ),
         (
@@ -279,28 +333,73 @@ cc_library(
     deps = [
         ":tensorflow_types",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:SideEffects",
         "@llvm-project//mlir:Support",
     ],
 )
 
+[[
+    cc_library(
+        name = "tensorflow_" + target["name"],
+        srcs = [
+            "ir/tf_ops.h",
+            "ir/tf_remaining_ops.h",
+            "ir/tf_" + target["name"] + ".cc",
+            "ir/tf_" + target["name"] + ".cc.inc",
+        ] + ["ir/tf_" + target["name"] + ".h" for target in tf_ops_category_list],
+        hdrs = [
+        ],
+        textual_hdrs = [
+            "ir/tf_all_ops.h.inc",
+            "ir/tf_ops_helpers.inc",
+            "ir/tf_remaining_ops.h.inc",
+        ] + ["ir/tf_" + target["name"] + ".h.inc" for target in tf_ops_category_list],
+        deps = [
+            ":attribute_utils",
+            ":tensorflow_attributes",
+            ":tensorflow_canonicalize_inc_gen",
+            ":tensorflow_op_interfaces",
+            ":tensorflow_op_interfaces_inc_gen",
+            ":tensorflow_side_effects",
+            ":tensorflow_structs",
+            ":tensorflow_traits",
+            ":tensorflow_types",
+            "@llvm-project//llvm:Support",
+            "@llvm-project//mlir:DerivedAttributeOpInterface",
+            "@llvm-project//mlir:Dialect",
+            "@llvm-project//mlir:IR",
+            "@llvm-project//mlir:InferTypeOpInterface",
+            "@llvm-project//mlir:LoopLikeInterface",
+            "@llvm-project//mlir:Parser",
+            "@llvm-project//mlir:SideEffects",
+            "@llvm-project//mlir:StandardOps",
+            "@llvm-project//mlir:Support",
+            "//tensorflow/core:framework",
+            "//tensorflow/core:lib",
+        ] + [":tensorflow_" + target["name"] + "_inc_gen"],
+    ),
+] for target in tf_ops_category_list]
+
 cc_library(
-    name = "tensorflow_ops",
+    name = "tensorflow_remaining_ops",
     srcs = [
-        "ir/tf_ops.cc",
-        "ir/tf_ops.cc.inc",
         "ir/tf_ops.h",
-    ],
+        "ir/tf_remaining_ops.h",
+        "ir/tf_remaining_ops.cc",
+    ] + ["ir/tf_" + target["name"] + ".h" for target in tf_ops_category_list],
     hdrs = [
     ],
     textual_hdrs = [
-        "ir/tf_ops.h.inc",
-    ],
+        "ir/tf_all_ops.h.inc",
+        "ir/tf_ops_helpers.inc",
+        "ir/tf_remaining_ops.h.inc",
+    ] + ["ir/tf_" + target["name"] + ".h.inc" for target in tf_ops_category_list],
     deps = [
         ":tensorflow_attributes",
         ":tensorflow_canonicalize_inc_gen",
         ":tensorflow_op_interfaces",
         ":tensorflow_op_interfaces_inc_gen",
-        ":tensorflow_ops_inc_gen",
+        ":tensorflow_remaining_ops_inc_gen",
         ":tensorflow_side_effects",
         ":tensorflow_structs",
         ":tensorflow_traits",
@@ -318,6 +417,43 @@ cc_library(
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
     ],
+)
+
+cc_library(
+    name = "tensorflow_ops",
+    srcs = [
+        "ir/tf_ops.cc",
+        "ir/tf_ops.h",
+    ],
+    textual_hdrs = [
+        "ir/tf_all_ops.h.inc",
+        "ir/tf_remaining_ops.h",
+    ] + ["ir/tf_" + target["name"] + ".h" for target in tf_ops_category_list],
+    deps = [
+        ":tensorflow_all_ops_inc_gen",
+        ":tensorflow_remaining_ops_inc_gen",
+        ":tensorflow_attributes",
+        ":tensorflow_canonicalize_inc_gen",
+        ":tensorflow_op_interfaces",
+        ":tensorflow_op_interfaces_inc_gen",
+        ":tensorflow_side_effects",
+        ":tensorflow_structs",
+        ":tensorflow_traits",
+        ":tensorflow_types",
+        ":tensorflow_remaining_ops",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:DerivedAttributeOpInterface",
+        "@llvm-project//mlir:Dialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:InferTypeOpInterface",
+        "@llvm-project//mlir:LoopLikeInterface",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:SideEffects",
+        "@llvm-project//mlir:StandardOps",
+        "@llvm-project//mlir:Support",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+    ] + [":tensorflow_" + target["name"] for target in tf_ops_category_list],
 )
 
 cc_library(
@@ -377,6 +513,7 @@ cc_library(
         "ir/tf_saved_model.cc",
     ],
     hdrs = [
+        "dialect_registration.h",
         "ir/tf_device.h",
         "ir/tf_executor.h",
         "ir/tf_ops.h",
@@ -392,12 +529,14 @@ cc_library(
     includes = ["include"],
     deps = [
         ":error_util",
+        ":tensorflow_all_ops_inc_gen",
         ":tensorflow_attributes",
         ":tensorflow_canonicalize_inc_gen",
         ":tensorflow_device_ops_inc_gen",
         ":tensorflow_executor_inc_gen",
         ":tensorflow_op_interfaces",
         ":tensorflow_ops",
+        ":tensorflow_side_effects",
         ":tensorflow_structs",
         ":tensorflow_traits",
         ":tensorflow_types",
@@ -539,9 +678,11 @@ cc_library(
 cc_library(
     name = "tf_saved_model_passes",
     srcs = [
+        "transforms/deduplicate_bound_input_bindings.cc",
         "transforms/freeze_global_tensors.cc",
         "transforms/lift_variables_pass.cc",
         "transforms/optimize_global_tensors.cc",
+        "transforms/remove_vars_in_session_initializer.cc",
     ],
     hdrs = [
         "transforms/tf_saved_model_passes.h",
@@ -563,6 +704,31 @@ cc_library(
         "@llvm-project//mlir:Transforms",
     ],
     alwayslink = 1,
+)
+
+cc_library(
+    name = "tensorflow_analysis",
+    srcs = [
+        "analysis/per_function_aggregate_analysis.h",
+        "analysis/resource_alias_analysis.cc",
+        "analysis/side_effect_analysis.cc",
+    ],
+    hdrs = [
+        "analysis/resource_alias_analysis.h",
+        "analysis/side_effect_analysis.h",
+    ],
+    deps = [
+        ":tensorflow",
+        ":tensorflow_types",
+        "//tensorflow/compiler/tf2xla:resource_operation_table",
+        "//tensorflow/core:framework",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Analysis",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+    ],
 )
 
 cc_library(
@@ -590,11 +756,15 @@ cc_library(
         "transforms/generated_optimize.inc",
         "transforms/gpu_fusion.cc",
         "transforms/graph_pruning.cc",
+        "transforms/guarantee_all_funcs_one_use.cc",
+        "transforms/init_text_file_to_import.cc",
         "transforms/launch_to_device_attribute.cc",
         "transforms/layout_optimization.cc",
+        "transforms/mark_ops_for_outside_compilation.cc",
         "transforms/materialize_mlir_passthrough_op.cc",
         "transforms/optimize.cc",
         "transforms/parallel_execute_to_islands.cc",
+        "transforms/parallelize_embedding_params_ops_pass.cc",
         "transforms/promote_resources_to_args.cc",
         "transforms/readonly_references_to_resources.cc",
         "transforms/region_control_flow_to_functional.cc",
@@ -608,8 +778,11 @@ cc_library(
         "transforms/sink_constant.cc",
         "transforms/stack_ops_decomposition.cc",
         "transforms/tensor_array_ops_decomposition.cc",
+        "transforms/tensor_device_copy_conversion.cc",
         "transforms/tensor_list_ops_decomposition.cc",
+        "transforms/test_resource_alias_analysis.cc",
         "transforms/test_side_effect_analysis.cc",
+        "transforms/test_visitor_util.cc",
         "transforms/tf_data_optimization_pass.cc",
         "transforms/tf_device_assignment.cc",
         "transforms/tpu_cluster_formation.cc",
@@ -618,11 +791,14 @@ cc_library(
         "transforms/tpu_extract_head_tail_outside_compilation.cc",
         "transforms/tpu_extract_outside_compilation.cc",
         "transforms/tpu_host_computation_expansion.cc",
+        "transforms/tpu_identity_pruning.cc",
         "transforms/tpu_merge_variables_with_execute.cc",
         "transforms/tpu_outside_compilation_cluster.cc",
+        "transforms/tpu_resource_read_for_write.cc",
         "transforms/tpu_rewrite_pass.cc",
         "transforms/tpu_sharding_identification_pass.cc",
         "transforms/tpu_space_to_depth_pass.cc",
+        "transforms/tpu_update_embedding_enqueue_op_inputs.cc",
         "transforms/tpu_variable_runtime_reformatting.cc",
         "translate/breakup-islands.cc",
         "translate/tf_executor_to_functional.cc",
@@ -638,6 +814,7 @@ cc_library(
     ],
     includes = ["include"],
     deps = [
+        ":attribute_utils",
         ":bridge_logger",
         ":convert_tensor",
         ":convert_type",
@@ -646,18 +823,22 @@ cc_library(
         ":device_util",
         ":error_util",
         ":export_tf_dialect_op",
+        ":lower_tf_lib",
         ":mangling_util",
-        ":side_effect_analysis",
         ":tensorflow",
+        ":tensorflow_analysis",
         ":tensorflow_optimize_inc_gen",
         ":tensorflow_types",
         ":tf_data_optimization",
         ":tpu_rewrite_device_util",
         ":translate_utils",
         ":unroll_batch_matmul_pass",
+        ":visitor_util",
         ":xla_sharding_util",
         "//tensorflow/compiler/mlir:op_or_arg_name_mapper",
         "//tensorflow/compiler/mlir/lite:validators",
+        "//tensorflow/compiler/mlir/xla:xla_legalize_tf",
+        "//tensorflow/compiler/mlir/xla:xla_legalize_tf_with_tf2xla",
         "//tensorflow/compiler/xla:xla_data_proto_cc",
         "//tensorflow/compiler/xla:xla_proto_cc",
         "//tensorflow/compiler/xla/client:sharding_builder",
@@ -668,6 +849,7 @@ cc_library(
         "//tensorflow/core/platform:random",
         "//tensorflow/core/protobuf/tpu:compile_metadata_proto_cc",
         "//tensorflow/core/protobuf/tpu:dynamic_padding_proto_cc",
+        "//tensorflow/core/tpu:tpu_embedding_optimization_parameters_utils",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
@@ -687,6 +869,7 @@ cc_library(
 cc_library(
     name = "tensorflow_test_passes",
     srcs = [
+        "transforms/init_text_file_to_import_test_pass.cc",
         "transforms/lift_variables_test_pass.cc",
         "transforms/lower_tf_pass.cc",
     ],
@@ -702,8 +885,10 @@ cc_library(
         "//tensorflow/core/platform:errors",
         "//tensorflow/core/platform:status",
         "//tensorflow/core/platform:threadpool_options",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
     ],
     alwayslink = 1,
@@ -776,6 +961,7 @@ cc_library(
         "//tensorflow/cc/saved_model:loader_lite",
         "//tensorflow/cc/saved_model:loader_util",
         "//tensorflow/compiler/jit:shape_inference_helpers",
+        "//tensorflow/compiler/mlir:name_utils",
         "//tensorflow/compiler/mlir:op_or_arg_name_mapper",
         "//tensorflow/compiler/tf2xla:functionalize_control_flow",
         "//tensorflow/compiler/xla:status_macros",
@@ -786,7 +972,6 @@ cc_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/grappler/utils:transitive_fanin",
-        "//tensorflow/core/platform:protobuf_internal",
         "//tensorflow/core/platform:types",
         "//tensorflow/stream_executor/lib",
         "@com_google_absl//absl/algorithm:container",
@@ -892,6 +1077,7 @@ cc_library(
         ":export_utils",
         ":tensorflow",
         "//tensorflow/compiler/xla:status_macros",
+        "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/stream_executor/lib",
@@ -907,6 +1093,7 @@ cc_library(
     srcs = ["translate/translate_tf_dialect_op.cc"],
     deps = [
         ":export_tf_dialect_op",
+        ":tensorflow",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -1092,7 +1279,7 @@ cc_library(
     name = "tf_dialect_passes",
     srcs = [
         "transforms/constant_fold.cc",
-        "transforms/dialect_hooks.cc",
+        "transforms/decode_attributes_hook.cc",
     ],
     hdrs = [
         "transforms/constant_fold.h",
@@ -1133,6 +1320,7 @@ cc_library(
     deps = [
         ":convert_graphdef",
         ":mlir_roundtrip_flags",
+        ":tensorflow",
         "//tensorflow/compiler/tf2xla:functionalize_control_flow_pass_registration",
         "//tensorflow/core:core_cpu",
         "//tensorflow/core:framework",
@@ -1188,10 +1376,13 @@ cc_library(
         ":mlir_roundtrip_flags",
         "//tensorflow/cc/saved_model:bundle_v2",
         "//tensorflow/core:graph",
+        "//tensorflow/core:lib",
         "//tensorflow/core:lib_proto_parsing",
         "//tensorflow/core:ops",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/grappler/utils:transitive_fanin",
+        "//tensorflow/stream_executor/lib",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
@@ -1224,6 +1415,7 @@ cc_library(
     deps = [
         ":convert_graphdef",
         ":mlir_roundtrip_flags",
+        ":tensorflow",
         ":translate_cl_options",
         ":translate_lib",
         "//tensorflow/core:protos_all_cc",
@@ -1261,27 +1453,23 @@ tf_native_cc_binary(
     ],
 )
 
-genrule(
+gentbl(
     name = "derived_attr_populator_inc",
-    srcs = [
+    tbl_outs = [
+        ("", "translate/derived_attr_populator.inc"),
+    ],
+    tblgen = ":derived_attr_populator_gen",
+    td_file = "ir/tf_ops.td",
+    td_srcs = [
+        "@llvm-project//mlir:include/mlir/IR/OpBase.td",
         "@llvm-project//mlir:include/mlir/Interfaces/CallInterfaces.td",
         "@llvm-project//mlir:include/mlir/Interfaces/InferTypeOpInterface.td",
         "@llvm-project//mlir:include/mlir/Interfaces/LoopLikeInterface.td",
         "@llvm-project//mlir:include/mlir/Interfaces/SideEffectInterfaces.td",
-        "@llvm-project//mlir:include/mlir/IR/OpBase.td",
         "ir/tf_generated_ops.td",
         "ir/tf_op_base.td",
         "ir/tf_op_interfaces.td",
-        "ir/tf_ops.td",
     ],
-    outs = [
-        "translate/derived_attr_populator.inc",
-    ],
-    cmd = ("$(location :derived_attr_populator_gen) " +
-           "-I external/llvm-project/mlir/include " +
-           "-I tensorflow/compiler/mlir " +
-           "$(location //tensorflow/compiler/mlir/tensorflow:ir/tf_ops.td) " + " -o $@"),
-    tools = [":derived_attr_populator_gen"],
 )
 
 filegroup(
@@ -1316,6 +1504,7 @@ COMPILE_MLIR_UTIL_DEPS = [
     ":mlir_roundtrip_flags",
     ":tensorflow",
     ":tensorflow_dialect_registration",
+    ":tensorflow_types",
     ":tensorflow_passes",
     ":translate_utils",
     "@com_google_absl//absl/types:optional",
@@ -1328,16 +1517,20 @@ COMPILE_MLIR_UTIL_DEPS = [
     "@llvm-project//mlir:TransformUtils",
     "@llvm-project//mlir:Transforms",
     "//tensorflow/compiler/mlir/hlo:hlo",
+    "//tensorflow/compiler/mlir/hlo:hlo_dialect_registration",
+    "//tensorflow/compiler/mlir/hlo:sink_constants_to_control_flow",
     "//tensorflow/compiler/mlir/xla:mlir_hlo_to_hlo",
     "//tensorflow/compiler/mlir/xla:type_to_shape",
     "//tensorflow/compiler/mlir/xla:xla_legalize_tf",
     "//tensorflow/compiler/mlir/xla:xla_legalize_tf_with_tf2xla",
-    "//tensorflow/compiler/mlir/xla:xla_sink_constants_to_control_flow",
     "//tensorflow/compiler/tf2xla:common",
-    "//tensorflow/compiler/tf2xla:xla_compiler",
+    "//tensorflow/compiler/tf2xla:xla_helpers",
+    "//tensorflow/compiler/tf2xla:xla_argument",
+    "//tensorflow/compiler/xla/client:xla_computation",
+    "//tensorflow/core/common_runtime:core_cpu_internal",
+    "//tensorflow/core/platform:logging",
     "//tensorflow/core:framework",
     "//tensorflow/core:protos_all_cc",
-    "//tensorflow/core/platform:logging",
     "//tensorflow/stream_executor/lib",
     "//tensorflow/compiler/xla:xla_data_proto_cc",
     "//tensorflow/compiler/xla/service:hlo",
@@ -1374,6 +1567,9 @@ tf_cc_test(
     srcs = ["utils/compile_mlir_util_test.cc"],
     deps = [
         ":compile_mlir_util",
+        "//tensorflow/cc:function_ops",
+        "//tensorflow/cc:resource_variable_ops",
+        "//tensorflow/cc:scope",
         "//tensorflow/compiler/jit",
         "//tensorflow/compiler/tf2xla:common",
         "//tensorflow/compiler/tf2xla:xla_compiler",
@@ -1449,6 +1645,7 @@ cc_library(
     deps = [
         ":lower_tf_inc_gen",
         ":tensorflow",
+        ":tensorflow_ops",
         ":tensorflow_types",
         "//tensorflow/core:framework",
         "@llvm-project//llvm:Support",
@@ -1501,6 +1698,7 @@ cc_library(
         ":tensorflow",
         "//tensorflow/core:core_cpu_lib",
         "//tensorflow/core:framework",
+        "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -1604,15 +1802,14 @@ cc_library(
 )
 
 cc_library(
-    name = "side_effect_analysis",
-    srcs = ["analysis/side_effect_analysis.cc"],
-    hdrs = ["analysis/side_effect_analysis.h"],
+    name = "visitor_util",
+    srcs = [
+        "utils/visitor_util.cc",
+    ],
+    hdrs = [
+        "utils/visitor_util.h",
+    ],
     deps = [
-        ":tensorflow",
-        ":tensorflow_types",
-        "//tensorflow/compiler/tf2xla:resource_operation_table",
-        "//tensorflow/core:framework",
-        "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -1634,5 +1831,13 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "attribute_utils",
+    hdrs = ["utils/attribute_utils.h"],
+    deps = [
+        "@llvm-project//mlir:IR",
     ],
 )

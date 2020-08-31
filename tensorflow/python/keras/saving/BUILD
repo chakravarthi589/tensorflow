@@ -144,6 +144,7 @@ tf_py_test(
     tags = [
         "no_rocm",
         "no_windows",
+        "notap",  # TODO(b/161198218): flaky timeout
     ],
     deps = [
         "//tensorflow/python:client_testlib",
@@ -176,7 +177,7 @@ tf_py_test(
     size = "medium",
     srcs = ["saved_model/revive_test.py"],
     python_version = "PY3",
-    shard_count = 4,
+    shard_count = 8,
     tags = [
         "no_windows",  # b/158005583
     ],

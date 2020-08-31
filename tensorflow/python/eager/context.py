@@ -42,6 +42,7 @@ from tensorflow.python.framework import device as pydev
 from tensorflow.python.util import compat
 from tensorflow.python.util import is_in_graph_mode
 from tensorflow.python.util import tf_contextlib
+from tensorflow.python.util.deprecation import deprecated
 from tensorflow.python.util.tf_export import tf_export
 
 GRAPH_MODE = 0
@@ -67,9 +68,6 @@ DEVICE_PLACEMENT_SILENT_FOR_INT32 = (
 SYNC = 0
 ASYNC = 1
 
-MIRRORING_NONE = pywrap_tfe.TFE_MIRRORING_NONE
-MIRRORING_ALL = pywrap_tfe.TFE_MIRRORING_ALL
-
 _KEEP_ALIVE_SECS = 600
 
 _python_eager_context_create_counter = monitoring.Counter(
@@ -79,6 +77,8 @@ _python_eager_context_create_counter = monitoring.Counter(
 
 class _EagerTensorCache(object):
   """Simple cache which evicts items based on length in a FIFO manner."""
+
+  __slots__ = ["_data", "_max_items", "_max_tensor_size"]
 
   def __init__(self, max_items=256, max_tensor_size=10000):
     self._data = collections.OrderedDict()
@@ -106,6 +106,8 @@ class FunctionCallOptions(object):
 
   Eager functions are functions decorated with tf.contrib.eager.defun.
   """
+
+  __slots__ = ["_config_proto_serialized", "_executor_type"]
 
   def __init__(self, executor_type=None, config_proto=None):
     """Constructor.
@@ -160,6 +162,8 @@ _tensor_caches_map = {}
 
 class _TensorCaches(threading.local):
   """Thread local tensor caches."""
+
+  __slots__ = ["_ones_rank_cache", "_zeros_cache"]
 
   def __init__(self):
     super(_TensorCaches, self).__init__()
@@ -316,6 +320,8 @@ class PhysicalDevice(
 class _AtomicCounter(object):
   """A simple atomic counter."""
 
+  __slots__ = ["_value", "_lock"]
+
   def __init__(self):
     self._value = 0
     self._lock = threading.Lock()
@@ -331,6 +337,8 @@ _context_id_counter = _AtomicCounter()
 
 class _TensorCacheDeleter(object):
   """Deletes tensor caches for a given context."""
+
+  __slots__ = ["_context_id"]
 
   def __init__(self, context_id):
     self._context_id = context_id
@@ -745,6 +753,41 @@ class Context(object):
     self._collective_scoped_allocator_enabled_ops = scoped_allocator_enabled_ops
     self._collective_use_nccl_communication = use_nccl_communication
     self._collective_device_filters = device_filters
+
+  def abort_collective_ops(self, code, message):
+    """Abort the collective ops.
+
+    This is intended to be used when a peer failure is detected, which allows
+    the user to handle the case instead of hanging. This aborts all on-going
+    collectives. After all subsequent collectives error immediately. The only
+    way to recovery now is to restart the program.
+
+    Args:
+      code: a `tf.errors` error code.
+      message: a string. The error message.
+    """
+    self.ensure_initialized()
+    pywrap_tfe.TFE_AbortCollectiveOps(self._handle, code, message)
+
+  def check_collective_ops_peer_health(self, task):
+    """Check collective peer health.
+
+    This probes each task to see if they're still alive. Note that restarted
+    tasks are considered a different one, and they're considered not healthy.
+
+    This should only be used in multi client multi worker training.
+
+    Args:
+      task: a task string, must be in the format of /job:xxx/replica:0/task:N.
+
+    Raises:
+      tf.errors.UnavailableError: when a peer is down.
+      tf.errors.FailedPreconditionError: when a peer is a different one from the
+        one this task has talked to, e.g. the peer has restarted.
+      tf.errors.InvalidArgumentError: when the task string is invalid.
+    """
+    self.ensure_initialized()
+    pywrap_tfe.TFE_CollectiveOpsCheckPeerHealth(self._handle, task)
 
   @property
   def _handle(self):
@@ -1229,12 +1272,7 @@ class Context(object):
           p: i for i, p in enumerate(self._physical_devices)
       }
 
-      # Construct the visible device list from all physical devices but ignore
-      # XLA devices
-      self._visible_device_list = [
-          d for d in self._physical_devices
-          if not d.device_type.startswith("XLA")
-      ]
+      self._visible_device_list = list(self._physical_devices)
       self._memory_growth_map = {
           d: None for d in self._physical_devices if d.device_type == "GPU"
       }
@@ -1388,6 +1426,12 @@ class Context(object):
 
     self._visible_device_list = visible_device_list
 
+  def get_total_memory_usage(self, dev):
+    """Returns total memory usage in bytes for the current device."""
+    self._initialize_physical_devices()
+    self.ensure_initialized()
+    return pywrap_tfe.TFE_GetTotalMemoryUsage(self._context_handle, dev)
+
   def get_memory_growth(self, dev):
     """Get if memory growth is enabled for a PhysicalDevice."""
     self._initialize_physical_devices()
@@ -1461,6 +1505,12 @@ class Context(object):
           "Virtual devices cannot be modified after being initialized")
 
     self._virtual_device_map[dev] = virtual_devices
+
+  @deprecated(
+      None, "XLA:CPU and XLA:GPU devices are deprecated", warn_once=True)
+  def enable_xla_devices(self):
+    """Enables XLA:CPU and XLA:GPU devices registration."""
+    pywrap_tfe.TF_EnableXlaDevices()
 
   @property
   def enable_mlir_bridge(self):
@@ -1616,27 +1666,6 @@ class Context(object):
             self._handle, self._device_policy)
 
   @property
-  def mirroring_policy(self):
-    # Only get the policy from the context if it has already been initialized
-    if self._context_handle is not None:
-      return pywrap_tfe.TFE_ContextGetMirroringPolicy(self._handle)
-
-    return self._mirroring_policy
-
-  @mirroring_policy.setter
-  def mirroring_policy(self, policy):
-    if policy is None:
-      policy = MIRRORING_NONE
-
-    if self._mirroring_policy is None or self._mirroring_policy != policy:
-      self._mirroring_policy = policy
-
-      # Only set the policy if the context has already been initialized
-      if self._context_handle is not None:
-        pywrap_tfe.TFE_ContextSetThreadLocalMirroringPolicy(
-            self._handle, self._mirroring_policy)
-
-  @property
   def lazy_remote_inputs_copy(self):
     return self._lazy_remote_inputs_copy
 
@@ -1729,6 +1758,8 @@ class Context(object):
 
 class _EagerDeviceContext(object):
   """Context-manager forcing placement of ops and Tensors on a device."""
+
+  __slots__ = ["_device_name", "_ctx", "_stack"]
 
   def __init__(self, ctx, device_name):
     self._device_name = device_name
@@ -2069,18 +2100,6 @@ def device_policy(policy):
     ctx.device_policy = old_policy
 
 
-@tf_contextlib.contextmanager
-def mirroring_policy(policy):
-  """Context manager for setting mirroring policy for current thread."""
-  ctx = context()
-  old_policy = ctx.mirroring_policy
-  try:
-    ctx.mirroring_policy = policy
-    yield
-  finally:
-    ctx.mirroring_policy = old_policy
-
-
 def set_execution_mode(mode):
   """Sets execution mode for the current thread."""
   context().execution_mode = mode
@@ -2283,7 +2302,7 @@ def async_scope():
         train_step_fn()
   except tf.errors.OutOfRangeError:
     tf.experimental.async_clear_error()
-  logging.info('loss =', loss.numpy())
+  logging.info('loss = %s', loss.numpy())
   ```
 
   Yields:
@@ -2337,7 +2356,7 @@ def async_clear_error():
     except tf.errors.OutOfRangeError:
       tf.experimental.async_clear_error()
       break
-  logging.info('loss =', loss.numpy())
+  logging.info('loss = %s', loss.numpy())
   ```
   """
   context().clear_executor_errors()
