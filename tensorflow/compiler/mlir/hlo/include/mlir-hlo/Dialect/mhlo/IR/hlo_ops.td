@@ -224,11 +224,14 @@ def HLO_LogisticOp: HLO_UnaryElementwiseOp<"logistic",
 
 def HLO_NotOp: HLO_UnaryElementwiseOp<"not",
     [NoSideEffect, SameOperandsAndResultType], HLO_PredOrIntTensor>,
-    BASE_HLO_NotOp;
+    BASE_HLO_NotOp {
+}
 
 def HLO_NegOp: HLO_UnaryElementwiseOp<"negate",
     [NoSideEffect, SameOperandsAndResultType], HLO_IntFpOrComplexTensor>,
-    BASE_HLO_NegOp;
+    BASE_HLO_NegOp {
+  let hasFolder = 1;
+}
 
 def HLO_PopulationCountOp: HLO_UnaryElementwiseOp<"popcnt",
     [NoSideEffect, SameOperandsAndResultType], HLO_IntTensor>,
@@ -379,6 +382,8 @@ class HLO_BinaryLogicalElementwiseOp<string mnemonic> :
     HLO_PredOrIntTensor:$lhs,
     HLO_PredOrIntTensor:$rhs
   );
+
+  let hasFolder = 1;
 }
 
 def HLO_AndOp: HLO_BinaryLogicalElementwiseOp<"and">, BASE_HLO_AndOp;
@@ -491,9 +496,7 @@ def HLO_RecvOp : HLO_Op<"recv", []> {
 
 def HLO_ReplicaIdOp : HLO_Op<"replica_id", [NoSideEffect]>,
       BASE_HLO_ReplicaIdOp {
-  // TODO(prakalps): The output should unsigned 32-bit integer but mlir does
-  // not differentiate between signed and unsigned int.
-  let results = (outs I32Tensor);
+  let results = (outs TensorOf<[UI32]>);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1067,6 +1070,8 @@ def HLO_GatherOp: HLO_Op<"gather", [NoSideEffect]>, BASE_HLO_GatherOp {
   );
 
   let results = (outs HLO_Tensor);
+
+  let hasCanonicalizer = 1;
 }
 
 def HLO_GetDimensionSizeOp: HLO_Op<"get_dimension_size", [NoSideEffect]>,
@@ -1153,6 +1158,8 @@ def HLO_SelectOp: HLO_Op<"select", [NoSideEffect, DeclareOpInterfaceMethods<Infe
   );
 
   let results = (outs HLO_Tensor);
+
+  let hasFolder = 1;
 }
 
 def HLO_SelectAndScatterOp: HLO_Op<"select_and_scatter",

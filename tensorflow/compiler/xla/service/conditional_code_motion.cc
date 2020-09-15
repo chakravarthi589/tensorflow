@@ -29,6 +29,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/call_inliner.h"
 #include "tensorflow/compiler/xla/service/hlo_casting_utils.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
+#include "tensorflow/compiler/xla/service/hlo_cse.h"
 #include "tensorflow/compiler/xla/service/hlo_dce.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/hlo_instructions.h"
@@ -96,6 +97,17 @@ class BoundaryVisitor {
   absl::flat_hash_set<HloInstruction*> visited_;
 };
 
+template <class OpCollection>
+int64 CountNonLeafOps(const OpCollection& ops) {
+  absl::flat_hash_set<HloInstruction*> op_set;
+  for (auto op : ops) {
+    if (!op_set.contains(op) && op->opcode() != HloOpcode::kConstant) {
+      op_set.insert(op);
+    }
+  }
+  return op_set.size();
+}
+
 // Returns estimation of potential reuses carried by a given pair of
 // instructions.  Use different integers to classify different levels
 // of reuses This is used as a placeholder only, assuming all
@@ -119,7 +131,7 @@ int64 ReusesCarriedBy(HloInstruction* op, HloInstruction* user) {
       return 10;
     default:
       // Assume fusion will not happen anyway if user count > 1)
-      if (op->user_count() > 1) {
+      if (CountNonLeafOps(op->users()) > 1) {
         return 0;
       }
       return 10;
@@ -507,8 +519,16 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
     VLOG(2) << "computation is :" << computation->ToString() << "\n";
     // Remove hoisted instructions from the branches.
     for (auto b2 : to_move_out) {
-      VLOG(2) << "Removing boundary:" << b2.ToString() << "\n";
-      TF_RETURN_IF_ERROR(computation->RemoveInstruction(b2.operands()[i]));
+      auto instr_to_remove = b2.operands()[i];
+      // Double check to make sure it is safe to delete the instruction.
+      // Complications may arise due to some operations in the alternative
+      // branches (branches 1..n) being placed into the boundaries multiple
+      // times.
+      if (!computation->IsMarkedAsDead(instr_to_remove) &&
+          instr_to_remove->user_count() == 0) {
+        VLOG(2) << "Removing boundary:" << b2.ToString() << "\n";
+        TF_RETURN_IF_ERROR(computation->RemoveInstruction(instr_to_remove));
+      }
     }
   }
   // Change conditional instruction shape to the shape of the new root.
@@ -667,6 +687,16 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionIn(
       VLOG(2) << "Has User: " << user->ToString() << "\n";
     }
     TF_RETURN_IF_ERROR(conditional->parent()->RemoveInstruction(op));
+  }
+
+  // Reset shapes of user gtes to the new shape.
+  if (use_index != -1) {
+    for (auto* user : conditional->users()) {
+      if (user->opcode() == HloOpcode::kGetTupleElement) {
+        *user->mutable_shape() =
+            conditional->shape().tuple_shapes(user->tuple_index());
+      }
+    }
   }
   VLOG(1) << "Done moving instructions inside branches\n"
           << conditional->parent()->ToString(HloPrintOptions::Fingerprint())
@@ -836,17 +866,6 @@ class GroupConnectedBoundaries {
     }
     return b2;
   }
-  int64 CountNonLeafOps(const xla::HloInstruction::InstructionVector& ops) {
-    int64 count = 0;
-    absl::flat_hash_set<HloInstruction*> op_set;
-    for (auto op : ops) {
-      if (!op_set.contains(op) && op->opcode() != HloOpcode::kConstant) {
-        count++;
-        op_set.insert(op);
-      }
-    }
-    return count;
-  }
   // This function is reused both for moving the boundary outside or into a
   // conditional. As the result, the readability is somewhat compromised.
   // It might be nice to refactor this function to factor the outside-inside
@@ -892,14 +911,15 @@ class GroupConnectedBoundaries {
       }
     }
   }
-  std::vector<Boundary> BoundariesToMoveInOrOut(const Boundary& b) {
+  std::vector<Boundary> BoundariesToMoveInOrOut(HloInstruction* conditional,
+                                                const Boundary& b) {
     // At the beginning of optimization, a conditional itself is added to a
     // worklist. Here the conditional is expanded into two sets of boundaries:
     // the first set contains the boundary that is inside branches and
     // contains the root of all branches; the second set of boundaries
     // contains all the users of the conditional.
     HloInstruction* inst = b.operands()[0];
-    if (inst->opcode() == HloOpcode::kConditional) {
+    if (inst == conditional) {
       int branch_count = inst->branch_count();
       // Add conditional roots as a new boundary to visit.
       Boundary boundary_in(Boundary::Position::kInsideBranch);
@@ -930,7 +950,8 @@ ConditionalCodeMotion::Decision ConditionalCodeMotion::ConsiderCodeMotion(
     HloInstruction* conditional, const Boundary& cur_boundary,
     std::vector<Boundary>& to_move, std::vector<Boundary>& new_boundaries) {
   GroupConnectedBoundaries connect(conditional, is_layout_sensitive_);
-  auto move_in_or_out = connect.BoundariesToMoveInOrOut(cur_boundary);
+  auto move_in_or_out =
+      connect.BoundariesToMoveInOrOut(conditional, cur_boundary);
   if (!move_in_or_out.empty()) {
     auto benefit = connect.BenefitForMovingBoundaries(move_in_or_out);
     VLOG(2) << "benefit of moving in or out "
@@ -953,6 +974,14 @@ ConditionalCodeMotion::Decision ConditionalCodeMotion::ConsiderCodeMotion(
 }
 
 StatusOr<bool> ConditionalCodeMotion::Run(HloModule* module) {
+  bool changed = false;
+  {
+    HloPassPipeline subpipeline("before_conditional_code_motion");
+    subpipeline.AddPass<HloCSE>(/*is_layout_sensitive=*/is_layout_sensitive_);
+    subpipeline.AddPass<HloDCE>();
+    TF_ASSIGN_OR_RETURN(bool cleanup_changed, subpipeline.Run(module));
+    changed |= cleanup_changed;
+  }
   // Gather all the conditional ops in the module ahead of time, to avoid
   // potential complications of modifying the code that affecting traversal.
   std::vector<HloInstruction*> conditional_ops;
@@ -975,7 +1004,6 @@ StatusOr<bool> ConditionalCodeMotion::Run(HloModule* module) {
     }
   }
 
-  bool changed = false;
   for (HloInstruction* conditional : conditional_ops) {
     int branch_count = conditional->branch_count();
     // check for shared conditional computations
@@ -1084,7 +1112,6 @@ StatusOr<bool> ConditionalCodeMotion::Run(HloModule* module) {
     subpipeline.AddPass<HloDCE>();
     subpipeline.AddPass<TupleSimplifier>();
     subpipeline.AddPass<HloDCE>();
-    subpipeline.AddPass<HloVerifier>(false, true);
     TF_ASSIGN_OR_RETURN(bool cleanup_changed, subpipeline.Run(module));
     changed |= cleanup_changed;
   }

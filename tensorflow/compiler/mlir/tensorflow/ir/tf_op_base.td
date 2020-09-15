@@ -117,6 +117,13 @@ def TF_VariableWrite : MemWrite<TF_VariableResource>;
 def TF_StackWrite : MemWrite<TF_StackResource>;
 def TF_TensorArrayWrite : MemWrite<TF_TensorArrayResource>;
 
+def TF_VariableAlloc : MemAlloc<TF_VariableResource>;
+def TF_StackAlloc : MemAlloc<TF_StackResource>;
+def TF_TensorArrayAlloc : MemAlloc<TF_TensorArrayResource>;
+
+def TF_StackFree : MemFree<TF_StackResource>;
+def TF_TensorArrayFree : MemFree<TF_TensorArrayResource>;
+
 //===----------------------------------------------------------------------===//
 // TensorFlow op definitions
 //===----------------------------------------------------------------------===//
@@ -296,7 +303,7 @@ def TF_QuantizedRef : AnyTypeOf<[TF_Qint8Ref, TF_Qint16Ref, TF_Qint32Ref,
 // Other reference types
 def TF_BoolRef : TF_TensorFlowType<"BoolRef", "boolref">;
 def TF_ResourceRef : TF_TensorFlowType<"ResourceRef", "resourceref">;
-def TF_StringRef : TF_TensorFlowType<"StringRef", "stringref">;
+def TF_StrRef : TF_TensorFlowType<"StringRef", "stringref">;
 def TF_VariantRef : TF_TensorFlowType<"VariantRef", "variantref">;
 
 // Reference tensor types
@@ -325,9 +332,11 @@ def TF_NumberRef : AnyTypeOf<[TF_IntRef, TF_FloatRef, TF_QuantizedRef,
 def TF_NumberTensor : TensorOf<[TF_Number]>;
 def TF_NumberRefTensor : TensorOf<[TF_NumberRef]>;
 
-def TF_NumberOrStr : AnyTypeOf<[TF_Float, TF_SInt, TF_Complex, TF_Uint8,
-                                TF_Str]>;
-def TF_NumberOrStrTensor : TensorOf<[TF_NumberOrStr]>;
+def TF_NumberNotQuantizedOrStr :
+  AnyTypeOf<[TF_Float, TF_SInt, TF_Complex, TF_Uint8, TF_Str]>;
+def TF_NumberNotQuantizedOrStrRef :
+  AnyTypeOf<[TF_FloatRef, TF_SIntRef, TF_ComplexRef, TF_Uint8Ref, TF_StrRef]>;
+def TF_NumberNotQuantizedOrStrTensor : TensorOf<[TF_NumberNotQuantizedOrStr]>;
 
 //===----------------------------------------------------------------------===//
 // Tensor and tensor element types

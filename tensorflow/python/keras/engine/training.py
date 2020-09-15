@@ -22,6 +22,7 @@ import copy
 import itertools
 import json
 import os
+import warnings
 import six
 
 from tensorflow.python.autograph.lang import directives
@@ -72,7 +73,6 @@ from tensorflow.python.training.tracking import base as trackable
 from tensorflow.python.training.tracking import data_structures
 from tensorflow.python.training.tracking import layer_utils as trackable_layer_utils
 from tensorflow.python.training.tracking import util as trackable_utils
-from tensorflow.python.util import deprecation
 from tensorflow.python.util import nest
 from tensorflow.python.util import tf_decorator
 from tensorflow.python.util.tf_export import keras_export
@@ -1366,7 +1366,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       if return_dict:
         return logs
       else:
-        results = [logs.get(name, None) for name in self.metrics_names]
+        results = []
+        for name in self.metrics_names:
+          if name in logs:
+            results.append(logs[name])
+        for key in sorted(logs.keys()):
+          if key not in self.metrics_names:
+            results.append(logs[key])
         if len(results) == 1:
           return results[0]
         return results
@@ -1769,8 +1775,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       outputs = self.predict_function(iterator)
     return tf_utils.to_numpy_or_python_type(outputs)
 
-  @deprecation.deprecated(
-      None, 'Please use Model.fit, which supports generators.')
   def fit_generator(self,
                     generator,
                     steps_per_epoch=None,
@@ -1792,6 +1796,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       `Model.fit` now supports generators, so there is no longer any need to use
       this endpoint.
     """
+    warnings.warn('`Model.fit_generator` is deprecated and '
+                  'will be removed in a future version. '
+                  'Please use `Model.fit`, which supports generators.')
     return self.fit(
         generator,
         steps_per_epoch=steps_per_epoch,
@@ -1808,8 +1815,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         shuffle=shuffle,
         initial_epoch=initial_epoch)
 
-  @deprecation.deprecated(
-      None, 'Please use Model.evaluate, which supports generators.')
   def evaluate_generator(self,
                          generator,
                          steps=None,
@@ -1824,6 +1829,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       `Model.evaluate` now supports generators, so there is no longer any need
       to use this endpoint.
     """
+    warnings.warn('`Model.evaluate_generator` is deprecated and '
+                  'will be removed in a future version. '
+                  'Please use `Model.evaluate`, which supports generators.')
     self._check_call_args('evaluate_generator')
 
     return self.evaluate(
@@ -1835,8 +1843,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         verbose=verbose,
         callbacks=callbacks)
 
-  @deprecation.deprecated(
-      None, 'Please use Model.predict, which supports generators.')
   def predict_generator(self,
                         generator,
                         steps=None,
@@ -1851,6 +1857,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       `Model.predict` now supports generators, so there is no longer any need
       to use this endpoint.
     """
+    warnings.warn('`Model.predict_generator` is deprecated and '
+                  'will be removed in a future version. '
+                  'Please use `Model.predict`, which supports generators.')
     return self.predict(
         generator,
         steps=steps,
@@ -2264,10 +2273,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         layer.reset_states()
 
   @property
-  @deprecation.deprecated(
-      date=None,
-      instructions='This property should not be used in TensorFlow 2.0, '
-      'as updates are applied automatically.')
   @doc_controls.do_not_generate_docs
   def state_updates(self):
     """Deprecated, do NOT use!
@@ -2281,6 +2286,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     Returns:
         A list of update ops.
     """
+    warnings.warn('`Model.state_updates` will be removed in a future version. '
+                  'This property should not be used in TensorFlow 2.0, '
+                  'as `updates` are applied automatically.')
     state_updates = []
     for layer in self.layers:
       if getattr(layer, 'stateful', False):
@@ -2291,6 +2299,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
   @property
   def weights(self):
     """Returns the list of all layer variables/weights.
+
+    Note: This will not track the weights of nested `tf.Modules` that are not
+    themselves Keras layers.
 
     Returns:
       A list of variables.
@@ -2582,15 +2593,33 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
   # Functions below exist only as v1 / v2 compatibility shims.
   ######################################################################
 
-  def _get_compile_args(self):
-    """Used for saving or cloning a Model."""
+  def _get_compile_args(self, user_metrics=True):
+    """Used for saving or cloning a Model.
+
+    Args:
+      user_metrics: Whether to return user-supplied metrics or `Metric` objects.
+        Defaults to returning the user-supplied metrics.
+
+    Returns:
+      Dictionary of arguments that were used when compiling the model.
+    """
     self._assert_compile_was_called()
     # pylint: disable=protected-access
+
+    saved_metrics = self.compiled_metrics._user_metrics
+    saved_weighted_metrics = self.compiled_metrics._user_weighted_metrics
+
+    if not user_metrics:
+      if saved_metrics is not None:
+        saved_metrics = self.compiled_metrics._metrics
+      if saved_weighted_metrics is not None:
+        saved_weighted_metrics = self.compiled_metrics._weighted_metrics
+
     compile_args = {
         'optimizer': self.optimizer,
         'loss': self.compiled_loss._user_losses,
-        'metrics': self.compiled_metrics._user_metrics,
-        'weighted_metrics': self.compiled_metrics._user_weighted_metrics,
+        'metrics': saved_metrics,
+        'weighted_metrics': saved_weighted_metrics,
         'loss_weights': self.compiled_loss._user_loss_weights,
     }
     # pylint: enable=protected-access

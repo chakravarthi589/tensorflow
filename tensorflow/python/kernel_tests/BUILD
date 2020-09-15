@@ -806,6 +806,7 @@ cuda_py_test(
     name = "matrix_square_root_op_test",
     size = "medium",
     srcs = ["matrix_square_root_op_test.py"],
+    tfrt_enabled = True,
     deps = [
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
@@ -925,6 +926,8 @@ cuda_py_test(
     name = "resource_variable_ops_test",
     size = "medium",
     srcs = ["resource_variable_ops_test.py"],
+    # TODO(kkb): CppMemoryChecker is flaky without these two flags, investigate.
+    #
     # TODO(b/128347673): Re-enable.
     tags = ["no_windows"],
     tfrt_enabled = True,
@@ -935,6 +938,7 @@ cuda_py_test(
         "//tensorflow/python:errors",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:framework_test_lib",
+        "//tensorflow/python:memory_checker",
         "//tensorflow/python:resource_variable_ops",
         "//tensorflow/python:variables",
         "@absl_py//absl/testing:parameterized",
@@ -1136,6 +1140,7 @@ tf_py_test(
     name = "string_format_op_test",
     size = "small",
     srcs = ["string_format_op_test.py"],
+    tfrt_enabled = True,
     deps = [
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
@@ -2051,7 +2056,7 @@ cuda_py_test(
     tags = [
         "multi_and_single_gpu",
     ],
-    tfrt_enabled = True,
+    tfrt_enabled = False,  # TODO(b/153089059): add support for complex128.
     deps = [
         "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",

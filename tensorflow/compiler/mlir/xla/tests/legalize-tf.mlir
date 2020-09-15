@@ -1269,6 +1269,15 @@ func @maxpool_3d_same_padding(%arg0: tensor<2x8x13x25x7xf32>) -> tensor<2x8x4x7x
   return %0 : tensor<2x8x4x7x7xf32>
 }
 
+// CHECK-LABEL: maxpool_explicit_padding
+func @maxpool_explicit_padding(%arg0: tensor<2x12x20x7xi32>) -> tensor<2x3x5x7xi32> {
+  // CHECK: tf.MaxPool
+  // TODO(b/165938852): need to support explicit padding in max_pool.
+
+  %0 = "tf.MaxPool"(%arg0) {data_format = "NHWC", ksize = [1, 2, 2, 1], padding = "EXPLICIT", strides = [1, 4, 4, 1]} : (tensor<2x12x20x7xi32>) -> tensor<2x3x5x7xi32>
+  return %0 : tensor<2x3x5x7xi32>
+}
+
 //===----------------------------------------------------------------------===//
 // MaxPoolGrad op legalizations.
 //===----------------------------------------------------------------------===//
@@ -1974,6 +1983,32 @@ func @acos_dynamic(%arg0: tensor<*xf32>) -> tensor<*xf32> {
 // CHLO:       return %[[VAL_13]]
   %0 = "tf.Acos"(%arg0) : (tensor<*xf32>) -> tensor<*xf32>
   return %0 : tensor<*xf32>
+}
+
+// CHECK-LABEL: @tan
+// CHECK-SAME: (%[[ARG:.*]]: tensor<2xf32>) -> tensor<2xf32>
+// CHLO-LABEL: @tan
+// CHLO-SAME: (%[[ARG:.*]]: tensor<2xf32>) -> tensor<2xf32>
+func @tan(%arg : tensor<2xf32>) -> tensor<2xf32> {
+  // CHECK: "chlo.tan"(%[[ARG]]) : (tensor<2xf32>) -> tensor<2xf32>
+  // CHLO: %[[SINE:.*]] = "mhlo.sine"(%[[ARG]])
+  // CHLO  %[[COSINE:.*]] = "mhlo.cosine"(%[[ARG]])
+  // CHLO  %[[RESULT:.*]] = "mhlo.divide"(%[[SINE]], %[[COSINE]])
+  %result = "tf.Tan"(%arg) : (tensor<2xf32>) -> tensor<2xf32>
+  return %result : tensor<2xf32>
+}
+
+// CHECK-LABEL: @tan_unranked
+// CHECK-SAME: (%[[ARG:.*]]: tensor<*xf32>) -> tensor<*xf32>
+// CHLO-LABEL: @tan_unranked
+// CHLO-SAME: (%[[ARG:.*]]: tensor<*xf32>) -> tensor<*xf32>
+func @tan_unranked(%arg : tensor<*xf32>) -> tensor<*xf32> {
+  // CHECK: "chlo.tan"(%[[ARG]]) : (tensor<*xf32>) -> tensor<*xf32>
+  // CHLO: %[[SINE:.*]] = "mhlo.sine"(%[[ARG]])
+  // CHLO  %[[COSINE:.*]] = "mhlo.cosine"(%[[ARG]])
+  // CHLO  %[[RESULT:.*]] = "mhlo.divide"(%[[SINE]], %[[COSINE]])
+  %result = "tf.Tan"(%arg) : (tensor<*xf32>) -> tensor<*xf32>
+  return %result : tensor<*xf32>
 }
 
 // CHECK-LABEL: func @cast_dynamic_i2f

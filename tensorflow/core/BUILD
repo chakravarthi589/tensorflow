@@ -72,7 +72,6 @@ load(
     "if_ios",
     "if_mobile",
     "if_not_windows",
-    "if_tpu",
     "tf_android_core_proto_headers",
     "tf_cc_test",
     "tf_cc_test_mkl",
@@ -117,6 +116,7 @@ load(
     "tf_protos_all_impl",
     "tf_protos_grappler_impl",
     "tf_protos_profiler_impl",
+    "tf_tpu_dependencies",
 )
 load(
     "//tensorflow/core/platform:rules_cc.bzl",
@@ -1086,9 +1086,7 @@ cc_library(
     ]) + if_tensorrt([
         "//tensorflow/compiler/tf2tensorrt:trt_engine_resource_op_kernels",
         "//tensorflow/compiler/tf2tensorrt:trt_op_kernels",
-    ]) + if_tpu([
-        "//tensorflow/core/tpu/kernels",
-    ]),
+    ]) + tf_tpu_dependencies(),
 )
 
 cc_library(
@@ -3003,14 +3001,7 @@ filegroup(
         # GIF data with optimization
         "lib/gif/testdata/optimized.gif",
         # BMP data
-        "lib/bmp/testdata/lena.bmp",
-        "lib/bmp/testdata/rgb_small.bmp",
-        "lib/bmp/testdata/rgb_small_255.bmp",
-        "lib/bmp/testdata/rgba_small.bmp",
-        "lib/bmp/testdata/rgba_small_255.bmp",
-        "lib/bmp/testdata/grayscale_small.bmp",
-        "lib/bmp/testdata/grayscale_small_3channels.bmp",
-        "lib/bmp/testdata/grayscale_small_4channels.bmp",
+        "//tensorflow/core/lib/bmp:bmp_testdata",
     ],
     visibility = ["//visibility:public"],
 )
@@ -3018,6 +3009,7 @@ filegroup(
 alias(
     name = "lmdb_testdata",
     actual = "//tensorflow/core/lib/lmdb:lmdb_testdata",
+    visibility = ["//visibility:public"],
 )
 
 alias(

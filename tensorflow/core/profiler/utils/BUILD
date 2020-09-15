@@ -323,6 +323,7 @@ tf_cc_test(
         "//tensorflow/core:lib",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
+        "//tensorflow/core/profiler/lib:connected_traceme",
         "//tensorflow/core/profiler/protobuf:xplane_proto_cc",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/types:optional",
@@ -431,6 +432,23 @@ cc_library(
         "//tensorflow/core/profiler/protobuf:tfstreamz_proto_cc",
         "//tensorflow/core/profiler/protobuf:xplane_proto_cc",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "step_interval",
+    hdrs = ["step_interval.h"],
+    deps = [
+        "//tensorflow/core:lib",
+    ],
+)
+
+cc_library(
+    name = "file_system_utils",
+    hdrs = ["file_system_utils.h"],
+    deps = [
+        "//tensorflow/core/platform",
         "@com_google_absl//absl/strings",
     ],
 )
