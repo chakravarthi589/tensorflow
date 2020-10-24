@@ -27,7 +27,6 @@ import warnings
 from six.moves import zip  # pylint: disable=redefined-builtin
 
 from tensorflow.python.eager import context
-from tensorflow.python.framework import composite_tensor
 from tensorflow.python.framework import ops
 from tensorflow.python.keras import backend
 from tensorflow.python.keras.engine import base_layer
@@ -641,7 +640,7 @@ class Functional(training_lib.Model):
 
       # Dtype casting.
       tensor = math_ops.cast(tensor, dtype=ref_input.dtype)
-    elif isinstance(tensor, composite_tensor.CompositeTensor):
+    elif tf_utils.is_extension_type(tensor):
       # Dtype casting.
       tensor = math_ops.cast(tensor, dtype=ref_input.dtype)
 
@@ -869,6 +868,13 @@ class Functional(training_lib.Model):
   @property
   def _trackable_saved_model_saver(self):
     return network_serialization.NetworkSavedModelSaver(self)
+
+  def _get_save_spec(self, dynamic_batch=True):
+    if getattr(self, '_has_explicit_input_shape', True):
+      # Functional models and Sequential models that have an explicit input
+      # shape should use the batch size set by the input layer.
+      dynamic_batch = False
+    return super(Functional, self)._get_save_spec(dynamic_batch)
 
 
 def _make_node_key(layer_name, node_index):
