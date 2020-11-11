@@ -18,6 +18,7 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "tensorflow/lite/delegates/gpu/cl/kernels/util.h"
 #include "tensorflow/lite/delegates/gpu/cl/kernels/work_group_picking.h"
+#include "tensorflow/lite/delegates/gpu/cl/tensor.h"
 #include "tensorflow/lite/delegates/gpu/common/access_type.h"
 
 namespace tflite {
@@ -106,14 +107,14 @@ bool OperationDef::IsBatchSupported() const {
 GPUOperation::GPUOperation(const OperationDef& definition)
     : definition_(definition) {}
 
-void GPUOperation::SetSrc(Tensor* ptr, int index) {
+void GPUOperation::SetSrc(GpuSpatialTensor* ptr, int index) {
   if (index >= src_.size()) {
     src_.resize(index + 1, nullptr);
   }
   src_[index] = ptr;
 }
 
-void GPUOperation::SetDst(Tensor* ptr, int index) {
+void GPUOperation::SetDst(GpuSpatialTensor* ptr, int index) {
   if (index >= dst_.size()) {
     dst_.resize(index + 1, nullptr);
   }
@@ -132,12 +133,13 @@ GPUOperation::GPUOperation(GPUOperation&& operation)
       definition_(std::move(operation.definition_)),
       src_(std::move(operation.src_)),
       dst_(std::move(operation.dst_)),
-      kernel_(std::move(operation.kernel_)),
       grid_dimension_(operation.grid_dimension_),
       work_group_launch_order_(operation.work_group_launch_order_),
       grid_size_(operation.grid_size_),
       src_tensors_names_(std::move(operation.src_tensors_names_)),
       dst_tensors_names_(std::move(operation.dst_tensors_names_)),
+      kernel_(std::move(operation.kernel_)),
+      cl_args_(std::move(operation.cl_args_)),
       work_groups_count_(operation.work_groups_count_),
       linkable_count_(operation.linkable_count_),
       elementwise_code_(std::move(operation.elementwise_code_)) {}
@@ -155,12 +157,13 @@ GPUOperation& GPUOperation::operator=(GPUOperation&& operation) {
     definition_ = std::move(operation.definition_);
     src_ = std::move(operation.src_);
     dst_ = std::move(operation.dst_);
-    kernel_ = std::move(operation.kernel_);
     std::swap(grid_dimension_, operation.grid_dimension_);
     std::swap(work_group_launch_order_, operation.work_group_launch_order_);
     std::swap(grid_size_, operation.grid_size_);
     src_tensors_names_ = std::move(operation.src_tensors_names_);
     dst_tensors_names_ = std::move(operation.dst_tensors_names_);
+    kernel_ = std::move(operation.kernel_);
+    cl_args_ = std::move(operation.cl_args_);
     std::swap(work_groups_count_, operation.work_groups_count_);
     std::swap(linkable_count_, operation.linkable_count_);
     elementwise_code_ = std::move(operation.elementwise_code_);
@@ -211,19 +214,29 @@ void GPUOperation::AddDstTensor(const std::string& tensor_name,
 
 absl::Status GPUOperation::UpdateParams() {
   for (int i = 0; i < src_tensors_names_.size(); ++i) {
-    RETURN_IF_ERROR(args_.SetObjectRef(src_tensors_names_[i], src_[i]));
+    const auto* cl_spatial_tensor = dynamic_cast<const Tensor*>(src_[i]);
+    if (!cl_spatial_tensor) {
+      return absl::InvalidArgumentError("Expected CLSpatialTensor.");
+    }
+    RETURN_IF_ERROR(
+        cl_args_.SetObjectRef(src_tensors_names_[i], cl_spatial_tensor));
   }
   for (int i = 0; i < dst_tensors_names_.size(); ++i) {
-    RETURN_IF_ERROR(args_.SetObjectRef(dst_tensors_names_[i], dst_[i]));
+    const auto* cl_spatial_tensor = dynamic_cast<const Tensor*>(dst_[i]);
+    if (!cl_spatial_tensor) {
+      return absl::InvalidArgumentError("Expected CLSpatialTensor.");
+    }
+    RETURN_IF_ERROR(
+        cl_args_.SetObjectRef(dst_tensors_names_[i], cl_spatial_tensor));
   }
-  RETURN_IF_ERROR(BindArguments(&args_));
+  RETURN_IF_ERROR(BindArguments(&cl_args_));
   grid_size_ = GetGridSize();
   work_groups_count_ = GetWorkGroupsCount(
       grid_dimension_, grid_size_, work_group_size_, work_group_launch_order_);
   return absl::OkStatus();
 }
 
-absl::Status GPUOperation::AssembleCode(const DeviceInfo& device_info,
+absl::Status GPUOperation::AssembleCode(const GpuInfo& gpu_info,
                                         CLContext* context) {
   if (elementwise_) {
     auto src_desc =
@@ -244,20 +257,14 @@ absl::Status GPUOperation::AssembleCode(const DeviceInfo& device_info,
 
     elementwise_code_ = "{\n" + code_ + "\n}\n" + elementwise_code_;
     code_ = GetElementWiseCode(definition_, check_src_channels_size_);
-    RETURN_IF_ERROR(args_.AllocateObjects(context));
-    RETURN_IF_ERROR(args_.TransformToCLCode(
-        device_info, {{dst_tensors_names_[0], elementwise_code_}}, &code_));
-  } else {
-    RETURN_IF_ERROR(args_.AllocateObjects(context));
-    RETURN_IF_ERROR(args_.TransformToCLCode(
-        device_info, {{dst_tensors_names_[0], elementwise_code_}}, &code_));
   }
-  return absl::OkStatus();
+  return cl_args_.Init(gpu_info, {{dst_tensors_names_[0], elementwise_code_}},
+                       context, &args_, &code_);
 }
 
 absl::Status GPUOperation::Compile(const CreationContext& creation_context) {
   RETURN_IF_ERROR(
-      AssembleCode(creation_context.GetDeviceInfo(), creation_context.context));
+      AssembleCode(creation_context.GetGpuInfo(), creation_context.context));
   RETURN_IF_ERROR(creation_context.cache->GetOrCreateCLKernel(
       code_, "main_function", compiler_options_, *creation_context.context,
       *creation_context.device, &kernel_));
@@ -266,15 +273,17 @@ absl::Status GPUOperation::Compile(const CreationContext& creation_context) {
 
 absl::Status GPUOperation::CompileDeserialized(
     const CreationContext& creation_context) {
+  RETURN_IF_ERROR(cl_args_.Init(creation_context.GetGpuInfo(), &args_,
+                                creation_context.context));
   return creation_context.cache->GetOrCreateCLKernel(
       code_, "main_function", compiler_options_, *creation_context.context,
       *creation_context.device, &kernel_);
 }
 
 void GPUOperation::GetPossibleKernelWorkGroups(
-    TuningType tuning_type, const DeviceInfo& device_info,
+    TuningType tuning_type, const GpuInfo& gpu_info,
     const KernelInfo& kernel_info, std::vector<int3>* work_groups) const {
-  GetPossibleWorkGroups(tuning_type, device_info, kernel_info, grid_size_,
+  GetPossibleWorkGroups(tuning_type, gpu_info, kernel_info, grid_size_,
                         work_groups);
 }
 
@@ -299,7 +308,7 @@ absl::Status GPUOperation::Tune(const TuningParameters& params) {
           GetWorkGroupsCount(grid_dimension_, grid_size_,
                              possible_work_groups[i], work_group_launch_order_);
     }
-    RETURN_IF_ERROR(args_.Bind(kernel_.kernel()));
+    RETURN_IF_ERROR(cl_args_.Bind(kernel_.kernel()));
     int best_work_group_index;
     RETURN_IF_ERROR(params.queue->GetBestWorkGroupIndex(
         kernel_, *params.info, work_groups_count, possible_work_groups,

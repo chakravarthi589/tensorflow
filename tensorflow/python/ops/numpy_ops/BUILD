@@ -13,7 +13,6 @@ py_library(
         "__init__.py",
         "np_array_ops.py",
         "np_arrays.py",
-        "np_config.py",
         "np_dtypes.py",
         "np_export.py",
         "np_math_ops.py",
@@ -89,6 +88,9 @@ cuda_py_test(
 cuda_py_test(
     name = "np_random_test",
     srcs = ["np_random_test.py"],
+    tags = [
+        "no_windows",  # TODO(b/172735406): Enable this.
+    ],
     deps = [
         ":numpy",
         "//tensorflow/python:platform",

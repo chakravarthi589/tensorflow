@@ -213,7 +213,8 @@ def _create_keras_history_helper(tensors, processed_ops, created_layers):
   for tensor in tensor_list:
     if getattr(tensor, '_keras_history', None) is not None:
       continue
-    if sparse_tensor.is_sparse(tensor):
+    if isinstance(
+        tensor, (sparse_tensor.SparseTensor, sparse_tensor.SparseTensorValue)):
       sparse_ops.append(tensor.op)
       continue
     if tf_utils.is_ragged(tensor):
@@ -417,6 +418,8 @@ def call_context():
   return call_ctx
 
 
+# Inject the call_context function to keras_deps to remove the dependency
+# from TFLite to Keras.
 keras_deps.register_call_context_function(call_context)
 
 

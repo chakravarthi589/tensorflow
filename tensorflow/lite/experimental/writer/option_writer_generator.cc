@@ -81,6 +81,7 @@ static const char* param_structs[] = {"TfLiteAddParams",
                                       "TfLiteReverseSequenceParams",
                                       "TfLiteWhileParams",
                                       "TfLiteCumsumParams",
+                                      "TfLiteCallOnceParams",
                                       nullptr};
 }  // namespace
 
@@ -119,7 +120,7 @@ class OpOptionData {
   const std::unordered_map<std::string, std::string>& op_to_option() {
     return op_to_option_;
   }
-  // Maps from option to to C struct i.e. 'AddOptions' -> 'TfLiteAddOptions'
+  // Maps from option to C struct i.e. 'AddOptions' -> 'TfLiteAddOptions'
   const std::unordered_map<std::string, std::string>& option_to_struct() {
     return option_to_struct_;
   }
